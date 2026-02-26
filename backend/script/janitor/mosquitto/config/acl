@@ -1,0 +1,28 @@
+# ── ACL правила Mosquitto ───────────────────────────────────────
+#
+# Топики системы:
+#   relay/{groupId}/trigger     ← backend публикует, ESP читает
+#   relay/{groupId}/status      → ESP публикует, backend/PWA читает
+#   relay/{groupId}/heartbeat   → ESP публикует
+#   sys/devices/{deviceId}/info → ESP публикует при подключении
+#   sys/devices/{deviceId}/lock → ESP, retained, занятость канала
+#   devices/{deviceId}/phonebook/full  ← backend → ESP
+#   devices/{deviceId}/phonebook/patch ← backend → ESP
+
+# mqttadmin — полный доступ (используется backend)
+user mqttadmin
+topic readwrite #
+
+# Шаблон для ESP устройств:
+# Каждое устройство получает логин вида: device_<MAC>
+# ACL генерируется автоматически backend при регистрации устройства
+# и добавляется в этот файл с последующим mosquitto reload
+
+# Пример записи для устройства (генерируется автоматически):
+# user device_AABBCCDDEEFF
+# topic read relay/+/trigger
+# topic write relay/+/status
+# topic write relay/+/heartbeat
+# topic write sys/devices/AABBCCDDEEFF/#
+# topic readwrite sys/devices/AABBCCDDEEFF/lock
+# topic read devices/AABBCCDDEEFF/#

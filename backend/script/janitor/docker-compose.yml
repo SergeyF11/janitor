@@ -1,0 +1,107 @@
+services:
+
+  # ── Backend (Node.js + Fastify) ──────────────────────────────
+  backend:
+    build: ./backend
+    image: janitor-backend:latest
+    container_name: janitor-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      BASE_PATH: /janitor
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@janitor-postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@janitor-redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      SUPERADMIN_LOGIN: ${SUPERADMIN_LOGIN}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD}
+      MQTT_BROKER_URL: mqtt://janitor-mosquitto:1883
+      MQTT_USER: ${MQTT_ADMIN_USER}
+      MQTT_PASSWORD: ${MQTT_ADMIN_PASSWORD}
+    depends_on:
+      janitor-postgres:
+        condition: service_healthy
+      janitor-redis:
+        condition: service_healthy
+      janitor-mosquitto:
+        condition: service_started
+    networks:
+      - janitor-internal
+      - smilart-services_default   # nginx видит backend по имени контейнера
+    logging:
+      driver: journald
+      options:
+        tag: janitor-backend
+
+  # ── PostgreSQL ────────────────────────────────────────────────
+  janitor-postgres:
+    image: postgres:16-alpine
+    container_name: janitor-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - janitor-internal
+    logging:
+      driver: journald
+      options:
+        tag: janitor-postgres
+
+  # ── Redis ─────────────────────────────────────────────────────
+  janitor-redis:
+    image: redis:7-alpine
+    container_name: janitor-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    volumes:
+      - ./redis/data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - janitor-internal
+    logging:
+      driver: journald
+      options:
+        tag: janitor-redis
+
+  # ── Mosquitto MQTT ────────────────────────────────────────────
+  janitor-mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: janitor-mosquitto
+    restart: unless-stopped
+    ports:
+      - "8883:8883"      # TLS наружу — для ESP устройств
+      # 1883 только внутри сети — не публикуем наружу!
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+      # Сертификаты Caddy (smilart.ru) — для TLS на 8883
+      - /opt/smilart-services/caddy/certificates/acme-v02.api.letsencrypt.org-directory/smilart.ru:/mosquitto/certs:ro
+    networks:
+      - janitor-internal
+    logging:
+      driver: journald
+      options:
+        tag: janitor-mosquitto
+
+networks:
+  janitor-internal:
+    driver: bridge
+    name: janitor-internal
+  smilart-services_default:
+    external: true    # подключаемся к существующей сети где живёт nginx
