@@ -54,6 +54,7 @@ struct RelayConfig {
   bool     active_low;
   char     name[32];
   char     mqtt_code[7];   // 6-значный код привязки + \0
+  bool isValid() const { return pin != (uint8_t)NOT_A_PIN; }
 };
 
 struct DeviceConfig {
@@ -74,23 +75,17 @@ struct DeviceConfig {
   bool tls_secure;          // true = проверять сертификат
   char tz[16];
   // Реле
-  uint8_t relay_count;
+  //uint8_t relay_count;
 
   RelayConfig relays[MAX_RELAYS];
+  
   uint8_t relayCount(){
-    // for ( uint8_t i = 0; i < MAX_RELAYS; i++){
-    //   if ( relays[i].pin == (uint8_t)NOT_A_PIN ) {
-    //     relay_count = i;
-    //     break;
-    // }
-    // return MAX_RELAYS;
-    //uint8_t i = 0;
-    relay_count = 0;
-    while( relays[relay_count].pin != (uint8_t)NOT_A_PIN  ){
-      relay_count++;
-      if ( relay_count >= MAX_RELAYS) break;
+    uint8_t count = 0;
+    for ( uint8_t i =0; i < MAX_RELAYS; i++){
+    if ( ! relays[i].isValid() ) continue;
+      count++;
     }
-    return relay_count;
+    return count;  
   };
 
   size_t printTo(Stream& p){
@@ -101,20 +96,21 @@ struct DeviceConfig {
     }
     out += p.print("TZ: "); out += p.println(tz);
     out += p.print("MQTT: ");
-    
+
     //auto relay_count = relayCount();
     if ( registered ){
         out += p.printf("%s:%s@%s:%u\n", mqtt_user, mqtt_pass, mqtt_host, mqtt_port);
     } else {
         
-        for( uint8_t i = 0; i < relay_count; i++){
-            if ( strlen( relays[i].mqtt_code ) == 6 ){
-                out += p.printf( "Try reg code %s on %s:%u\n", relays[0].mqtt_code, mqtt_host, mqtt_port);
-            }
+        for( uint8_t i = 0; i < MAX_RELAYS/* relay_count */; i++){
+          if ( ! relays[i].isValid() ) continue;
+          if ( strlen( relays[i].mqtt_code ) == 6 ){
+              out += p.printf( "Try reg code %s on %s:%u\n", relays[0].mqtt_code, mqtt_host, mqtt_port);
+          }
         }
     }
     out += p.printf("TLS: %s\n", tls_secure ? "secure" : "insecure");
-    out += p.printf("Relays %u\n", relay_count );
+    out += p.printf("Relays %u\n", relayCount() );
     return out;
   }
 };

@@ -90,21 +90,21 @@ class StorageManager {
 public:
   bool begin() {
     if (!LittleFS.begin()) {
-      Serial.println("[FS] LittleFS mount failed, formatting...");
+      Serial.println(F("[FS] LittleFS mount failed, formatting..."));
       LittleFS.format();
       if (!LittleFS.begin()) {
-        Serial.println("[FS] Fatal: cannot mount LittleFS");
+        Serial.println(F("[FS] Fatal: cannot mount LittleFS"));
         return false;
       }
     }
-    Serial.println("[FS] LittleFS mounted");
+    Serial.println(F("[FS] LittleFS mounted"));
     return true;
   }
 
   // Загрузить конфиг из файла
   bool loadConfig(DeviceConfig& cfg) {
     if (!LittleFS.exists(CONFIG_FILE)) {
-      Serial.println("[FS] No config file, using defaults");
+      Serial.println(F("[FS] No config file, using defaults"));
       _setDefaults(cfg);
       return false;
     }
@@ -116,7 +116,7 @@ public:
     f.close();
 
     String json = Crypto::decrypt(encrypted);
-    Serial.println("[FS] Config loaded");
+    Serial.println(F("[FS] Config loaded"));
     Serial.println( json );
 
     return _parseJson(json, cfg);
@@ -132,14 +132,14 @@ public:
     f.print(encrypted);
     f.close();
 
-    Serial.println("[FS] Config saved");
+    Serial.println(F("[FS] Config saved"));
     return true;
   }
 
   // Сбросить конфиг (удалить файл)
   void resetConfig() {
     LittleFS.remove(CONFIG_FILE);
-    Serial.println("[FS] Config reset");
+    Serial.println(F("[FS] Config reset"));
   }
 
   // Проверить наличие сертификата
@@ -185,7 +185,7 @@ private:
   bool _parseJson(const String& json, DeviceConfig& cfg) {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) {
-      Serial.println("[FS] JSON parse error");
+      Serial.println(F("[FS] JSON parse error"));
       _setDefaults(cfg);
       return false;
     }
@@ -205,17 +205,17 @@ private:
     //cfg.relay_count = min((int)(doc["rc"] | 1), MAX_RELAYS);
     JsonArray relays = doc["rl"].as<JsonArray>();
 
-    cfg.relay_count = 0;
-    for (uint8_t i = 0; i < MAX_RELAYS /* cfg.relay_count */ && i < relays.size(); i++) {
-      bool validRelay = relays[i]["p"];
-      if( validRelay ) cfg.relay_count++;
-      
+    //cfg.relay_count = 0; //relays.size();
+    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
       cfg.relays[i].pin        = relays[i]["p"]  | (uint8_t)NOT_A_PIN;
+
+      bool validRelay = cfg.relays[i].pin != (uint8_t)NOT_A_PIN;
+      //if ( validRelay ) cfg.relay_count++;
+      
       cfg.relays[i].active_low = relays[i]["al"] | true;
       strlcpy(cfg.relays[i].name,       relays[i]["n"]  | "Relay", sizeof(cfg.relays[i].name));
-      strlcpy(cfg.relays[i].mqtt_code,  relays[i]["c"]  | "",      sizeof(cfg.relays[i].mqtt_code));
+      strlcpy(cfg.relays[i].mqtt_code,  relays[i]["c"]  | "",      sizeof(cfg.relays[i].mqtt_code)); 
     }
-    //cfg.relayCount();
     return true;
   }
 
@@ -237,7 +237,9 @@ private:
 
     JsonArray relays = doc.createNestedArray("rl");
    
-    for (uint8_t i = 0; i < cfg.relay_count ; i++) {
+    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+      if ( ! cfg.relays[i].isValid() ) continue;
+
       if ( cfg.relays[i].pin != (uint8_t)NOT_A_PIN ){
         JsonObject r = relays.createNestedObject();
         r["p"]  = cfg.relays[i].pin;

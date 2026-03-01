@@ -42,7 +42,7 @@ bool needPortal() {
   pinMode(RESET_PIN, INPUT_PULLUP);
   delay(100);
   if (digitalRead(RESET_PIN) == LOW) {
-    Serial.println("[BOOT] Reset button held, starting portal");
+    Serial.println(F("[BOOT] Reset button held, starting portal"));
     return true;
   }
 
@@ -59,7 +59,9 @@ void registerPendingRelays() {
 
   bool changed = false;
   //auto relay_count = cfg.relayCount();
-  for (uint8_t i = 0; i < cfg.relay_count; i++) {
+  for (uint8_t i = 0; i < MAX_RELAYS/* cfg.relay_count */; i++) {
+    if ( ! cfg.relays[i].isValid() ) continue;
+    
     if (strlen(cfg.relays[i].mqtt_code) == 6) {
       Serial.printf("[BOOT] Relay %d has pending code, registering...\n", i+1);
       if (MqttMgr.registerRelay(i)) {
@@ -75,8 +77,8 @@ void registerPendingRelays() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n\n[BOOT] Janitor ESP v" FW_VERSION);
-  Serial.println("[BOOT] " + String(
+  Serial.println(F("\n\n[BOOT] Janitor ESP v" FW_VERSION));
+  Serial.println(F("[BOOT] ") + String(
     #ifdef ESP32
       "ESP32"
     #else
@@ -94,7 +96,7 @@ void setup() {
 
   // Монтируем файловую систему
   if (!Storage.begin()) {
-    Serial.println("[BOOT] Storage failed!");
+    Serial.println(F("[BOOT] Storage failed!"));
     Led.setMode( LedManager::ERROR );
     while (true) { Led.update(); delay(10); }
   }
@@ -107,7 +109,7 @@ void setup() {
 
   // Решаем — нужен ли портал
   if (needPortal()) {
-    Serial.println("[BOOT] Starting CaptivePortal...");
+    Serial.println(F("[BOOT] Starting CaptivePortal..."));
     state = STATE_PORTAL;
     Portal.begin(cfg);
 
@@ -117,7 +119,7 @@ void setup() {
     }
 
     Portal.stop();
-    Serial.println("[BOOT] Portal closed, restarting...");
+    Serial.println(F("[BOOT] Portal closed, restarting..."));
     delay(500);
     ESP.restart();
     return;
@@ -126,7 +128,7 @@ void setup() {
   // Подключаемся к WiFi
   state = STATE_CONNECTING;
   if (!WifiMgr.connect(cfg)) {
-    Serial.println("[BOOT] WiFi failed, starting portal...");
+    Serial.println(F("[BOOT] WiFi failed, starting portal..."));
     Portal.begin(cfg);
     while (!Portal.tick()) { delay(1); }
     Portal.stop();
@@ -137,7 +139,7 @@ void setup() {
 // Синхронизация времени
   bool needTls = cfg.tls_secure && Storage.hasCert();
   if (!WifiMgr.syncTime(needTls)) {
-    Serial.println("[BOOT] NTP failed!");
+    Serial.println(F("[BOOT] NTP failed!"));
     if (needTls) {
       // Без времени TLS не работает — уходим в портал
       Portal.begin(cfg);
@@ -158,7 +160,7 @@ void setup() {
 
   // Подключаемся к MQTT
   if (!MqttMgr.connect()) {
-    Serial.println("[BOOT] MQTT initial connect failed, will retry in loop");
+    Serial.println(F("[BOOT] MQTT initial connect failed, will retry in loop"));
     Led.setMode( LedManager::ERROR );
     //Led.setMode( LedManager::ERROR );
   } else {
@@ -166,7 +168,7 @@ void setup() {
   }
 
   state = STATE_RUNNING;
-  Serial.println("[BOOT] Ready!");
+  Serial.println(F("[BOOT] Ready!"));
 }
 
 void loop() {

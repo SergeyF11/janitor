@@ -1,50 +1,31 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { VitePWA } from 'vite-plugin-pwa'
+import { resolve } from 'path'
 
 export default defineConfig({
-  plugins: [
-    react(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      base: '/janitor/',
-      scope: '/janitor/',
-      manifest: false, // используем наш manifest.json
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        navigateFallback: '/janitor/index.html',
-        navigateFallbackDenylist: [/^\/janitor\/api/, /^\/janitor\/ws/],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/smilart\.ru\/janitor\/api\/.*/i,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              expiration: { maxEntries: 50, maxAgeSeconds: 300 }
-            }
-          }
-        ]
-      }
-    })
-  ],
+  plugins: [react()],
+
   base: '/janitor/',
-  server: {
-    proxy: {
-      '/janitor/api': {
-        target: 'https://smilart.ru',
-        changeOrigin: true,
-        secure: true,
-      },
-      '/janitor/ws': {
-        target: 'wss://smilart.ru',
-        ws: true,
-        changeOrigin: true,
-        secure: true,
+
+  build: {
+    outDir: 'dist',
+    rollupOptions: {
+      input: {
+        // Основное PWA — /janitor/
+        main: resolve(__dirname, 'index.html'),
+        // Суперадмин — /janitor/superadmin/
+        superadmin: resolve(__dirname, 'superadmin.html'),
       }
     }
   },
-  build: {
-    outDir: 'dist',
-    assetsDir: 'assets',
+
+  server: {
+    proxy: {
+      '/janitor/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        ws: true,
+      }
+    }
   }
 })

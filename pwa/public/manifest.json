@@ -2,7 +2,7 @@
   "id": "/janitor/",
   "name": "Привратник",
   "short_name": "Привратник",
-  "description": "Система управления реле",
+  "description": "Система управления доступом",
   "start_url": "/janitor/",
   "scope": "/janitor/",
   "display": "standalone",

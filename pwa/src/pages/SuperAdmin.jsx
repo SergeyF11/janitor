@@ -1,385 +1,497 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
-  getAdmins, createAdmin,
-  getSaGroups, createGroup, assignGroupAdmin,
-  getSaLogs, updateSingleSession
+  saGetStats, saGetAdmins, saCreateAdmin, saUpdateAdmin, saDeleteAdmin,
+  saResetAdminSessions, saResetAdminPassword,
+  saGetGroups, saCreateGroup, saUpdateGroup, saDeleteGroup,
+  saAssignGroupAdmin, saRemoveGroupAdmin,
+  saGetUsers, saUpdateUser, saResetUserPassword, saResetUserSessions,
+  saGetDevices, saDeleteDevice,
+  saGetLogs, saQuery, logout
 } from '../api'
 
-export default function SuperAdmin({ user, onBack }) {
-  const [tab, setTab] = useState('groups')
-  const [groups, setGroups] = useState([])
-  const [admins, setAdmins] = useState([])
-  const [logs, setLogs] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+const TABS = ['stats', 'admins', 'groups', 'users', 'devices', 'logs', 'sql']
+const TAB_LABELS = {
+  stats: 'Статистика', admins: 'Администраторы', groups: 'Группы',
+  users: 'Пользователи', devices: 'Устройства', logs: 'Журнал', sql: 'SQL'
+}
 
-  const [showAddGroup, setShowAddGroup] = useState(false)
-  const [showAddAdmin, setShowAddAdmin] = useState(false)
-  const [newGroup, setNewGroup] = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500 })
-  const [newAdmin, setNewAdmin] = useState({ login: '', password: '', single_session: true })
-  const [assignModal, setAssignModal] = useState(null)
-  const [selectedAdmin, setSelectedAdmin] = useState('')
+export default function SuperAdmin({ user, onLogout }) {
+  const [tab, setTab]       = useState('stats')
+  const [data, setData]     = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError]   = useState(null)
 
-  useEffect(() => { loadAll() }, [])
-
-  const loadAll = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
-      const [g, a, l] = await Promise.all([getSaGroups(), getAdmins(), getSaLogs()])
-      setGroups(g.data)
-      setAdmins(a.data)
-      setLogs(l.data)
-    } catch (err) {
-      setError('Ошибка загрузки данных')
+      const loaders = {
+        stats:   saGetStats,
+        admins:  saGetAdmins,
+        groups:  saGetGroups,
+        users:   () => saGetUsers({ limit: 100 }),
+        devices: saGetDevices,
+        logs:    () => saGetLogs({ limit: 100 }),
+        sql:     () => null,
+      }
+      const result = await loaders[tab]()
+      setData(result)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [tab])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleLogout() {
+    await logout()
+    onLogout()
+  }
+
+  return (
+    <div className="sa-screen">
+      <header className="sa-header">
+        <h1 className="sa-title">⚙️ Суперадмин</h1>
+        <div className="sa-header-right">
+          <span className="sa-login">{user?.login}</span>
+          <button className="btn btn-outline btn-sm" onClick={handleLogout}>Выйти</button>
+        </div>
+      </header>
+
+      <div className="sa-layout">
+        <nav className="sa-nav">
+          {TABS.map(t => (
+            <button key={t} className={`sa-nav-item ${tab === t ? 'active' : ''}`}
+                    onClick={() => setTab(t)}>
+              {TAB_LABELS[t]}
+            </button>
+          ))}
+        </nav>
+
+        <main className="sa-content">
+          {loading && <div className="sa-loading"><div className="spinner" /></div>}
+          {error   && <div className="sa-error">{error}</div>}
+          {!loading && !error && (
+            <>
+              {tab === 'stats'   && <StatsTab   data={data} />}
+              {tab === 'admins'  && <AdminsTab  data={data} reload={load} />}
+              {tab === 'groups'  && <GroupsTab  data={data} reload={load} />}
+              {tab === 'users'   && <UsersTab   data={data} reload={load} />}
+              {tab === 'devices' && <DevicesTab data={data} reload={load} />}
+              {tab === 'logs'    && <LogsTab    data={data} reload={load} />}
+              {tab === 'sql'     && <SqlTab />}
+            </>
+          )}
+        </main>
+      </div>
+    </div>
+  )
+}
+
+// ── Статистика ────────────────────────────────────────────────
+function StatsTab({ data }) {
+  if (!data) return null
+  const items = [
+    { label: 'Пользователей',  value: data.total_users },
+    { label: 'Администраторов', value: data.total_admins },
+    { label: 'Групп',          value: data.total_groups },
+    { label: 'Устройств',      value: data.total_devices },
+    { label: 'Онлайн',         value: data.online_devices },
+    { label: 'Активных сессий', value: data.active_sessions },
+    { label: 'Событий за 24ч', value: data.events_24h },
+    { label: 'Входов за 24ч',  value: data.logins_24h },
+  ]
+  return (
+    <div className="stats-grid">
+      {items.map(({ label, value }) => (
+        <div key={label} className="stat-card">
+          <div className="stat-value">{value ?? '—'}</div>
+          <div className="stat-label">{label}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Администраторы ────────────────────────────────────────────
+function AdminsTab({ data, reload }) {
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ login: '', password: '', single_session: true })
+  const [resetPwd, setResetPwd] = useState({})  // id → новый пароль
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState(null)
+
+  async function handleCreate(e) {
+    e.preventDefault()
+    setSaving(true); setErr(null)
+    try {
+      await saCreateAdmin(form)
+      setForm({ login: '', password: '', single_session: true })
+      setShowCreate(false)
+      reload()
+    } catch (e) {
+      setErr(e.message === 'login_taken' ? 'Логин занят.' : 'Ошибка.')
+    } finally { setSaving(false) }
+  }
+
+  async function handleDelete(id, login) {
+    if (!confirm(`Удалить администратора ${login}?`)) return
+    await saDeleteAdmin(id); reload()
+  }
+
+  async function handleResetPwd(id) {
+    const pwd = resetPwd[id]?.trim()
+    if (!pwd || pwd.length < 6) return
+    await saResetAdminPassword(id, pwd)
+    setResetPwd(p => ({ ...p, [id]: '' }))
+    alert('Пароль сброшен.')
+  }
+
+  return (
+    <div className="sa-tab">
+      <div className="sa-toolbar">
+        <button className="btn btn-primary btn-sm" onClick={() => setShowCreate(v => !v)}>
+          {showCreate ? 'Отмена' : '+ Создать администратора'}
+        </button>
+      </div>
+
+      {showCreate && (
+        <form onSubmit={handleCreate} className="sa-form">
+          <div className="field-row">
+            <div className="field">
+              <label>Логин</label>
+              <input value={form.login} onChange={e => setForm(f => ({ ...f, login: e.target.value }))} required />
+            </div>
+            <div className="field">
+              <label>Пароль</label>
+              <input type="password" value={form.password}
+                     onChange={e => setForm(f => ({ ...f, password: e.target.value }))} required minLength={6} />
+            </div>
+            <div className="field field-checkbox">
+              <label>
+                <input type="checkbox" checked={form.single_session}
+                       onChange={e => setForm(f => ({ ...f, single_session: e.target.checked }))} />
+                Одна сессия
+              </label>
+            </div>
+          </div>
+          {err && <div className="form-error">{err}</div>}
+          <button type="submit" className="btn btn-primary" disabled={saving}>
+            {saving ? 'Сохранение...' : 'Создать'}
+          </button>
+        </form>
+      )}
+
+      <div className="sa-list">
+        {(data || []).map(a => (
+          <div key={a.id} className="sa-row">
+            <div className="sa-row-main">
+              <span className="sa-row-login">{a.login}</span>
+              {a.display_name && <span className="sa-row-name">{a.display_name}</span>}
+              {a.has_session && <span className="session-dot" title="Активная сессия">●</span>}
+              {!a.is_active  && <span className="badge-inactive">заблокирован</span>}
+              <span className={`badge-ss ${a.single_session ? 'on' : 'off'}`}>
+                {a.single_session ? '🔒' : '🔓'}
+              </span>
+            </div>
+            <div className="sa-row-groups">
+              {(a.groups || []).map(g => (
+                <span key={g.id} className="badge-group">{g.name}</span>
+              ))}
+            </div>
+            <div className="sa-row-actions">
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => saUpdateAdmin(a.id, { single_session: !a.single_session }).then(reload)}>
+                {a.single_session ? '🔒' : '🔓'}
+              </button>
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => saUpdateAdmin(a.id, { is_active: !a.is_active }).then(reload)}>
+                {a.is_active ? 'Блок' : 'Разблок'}
+              </button>
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => saResetAdminSessions(a.id).then(reload)}>
+                ⏏ Сессия
+              </button>
+              <input className="input-inline" placeholder="Новый пароль"
+                     value={resetPwd[a.id] || ''}
+                     onChange={e => setResetPwd(p => ({ ...p, [a.id]: e.target.value }))} />
+              <button className="btn btn-warning btn-xs" onClick={() => handleResetPwd(a.id)}>
+                Сбросить пароль
+              </button>
+              <button className="btn btn-danger btn-xs" onClick={() => handleDelete(a.id, a.login)}>
+                ✕
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Группы ────────────────────────────────────────────────────
+function GroupsTab({ data, reload }) {
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState(null)
+
+  async function handleCreate(e) {
+    e.preventDefault()
+    setSaving(true); setErr(null)
+    try {
+      await saCreateGroup(form)
+      setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
+      setShowCreate(false); reload()
+    } catch (e) {
+      setErr(e.message === 'mqtt_topic_taken' ? 'MQTT топик занят.' : 'Ошибка.')
+    } finally { setSaving(false) }
+  }
+
+  async function handleDelete(id, name) {
+    if (!confirm(`Удалить группу "${name}"? Все пользователи без других групп будут удалены.`)) return
+    await saDeleteGroup(id); reload()
+  }
+
+  return (
+    <div className="sa-tab">
+      <div className="sa-toolbar">
+        <button className="btn btn-primary btn-sm" onClick={() => setShowCreate(v => !v)}>
+          {showCreate ? 'Отмена' : '+ Создать группу'}
+        </button>
+      </div>
+
+      {showCreate && (
+        <form onSubmit={handleCreate} className="sa-form">
+          <div className="field-row">
+            <div className="field">
+              <label>Название</label>
+              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
+            </div>
+            <div className="field">
+              <label>MQTT топик</label>
+              <input value={form.mqtt_topic}
+                     onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value }))} required />
+            </div>
+            <div className="field">
+              <label>Длит. реле (мс, 0=триггер)</label>
+              <input type="number" min="0" value={form.relay_duration_ms}
+                     onChange={e => setForm(f => ({ ...f, relay_duration_ms: +e.target.value }))} />
+            </div>
+            <div className="field">
+              <label>Квота (0=∞)</label>
+              <input type="number" min="0" value={form.user_quota}
+                     onChange={e => setForm(f => ({ ...f, user_quota: +e.target.value }))} />
+            </div>
+          </div>
+          {err && <div className="form-error">{err}</div>}
+          <button type="submit" className="btn btn-primary" disabled={saving}>
+            {saving ? 'Сохранение...' : 'Создать'}
+          </button>
+        </form>
+      )}
+
+      <div className="sa-list">
+        {(data || []).map(g => (
+          <div key={g.id} className="sa-row">
+            <div className="sa-row-main">
+              <span className="sa-row-login">{g.name}</span>
+              <span className="badge-topic">{g.mqtt_topic}</span>
+              <span className={`badge-status ${g.status}`}>{g.status}</span>
+              <span className="sa-row-meta">{g.user_count} польз. · {g.admin_count} адм.</span>
+            </div>
+            <div className="sa-row-admins">
+              {(g.admins || []).map(a => (
+                <span key={a.id} className="badge-admin">
+                  {a.login}
+                  <button className="badge-remove"
+                          onClick={() => saRemoveGroupAdmin(g.id, a.id).then(reload)}>×</button>
+                </span>
+              ))}
+            </div>
+            <div className="sa-row-actions">
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => saUpdateGroup(g.id, { status: g.status === 'active' ? 'blocked' : 'active' }).then(reload)}>
+                {g.status === 'active' ? 'Блок' : 'Разблок'}
+              </button>
+              <button className="btn btn-danger btn-xs" onClick={() => handleDelete(g.id, g.name)}>✕</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Пользователи ──────────────────────────────────────────────
+function UsersTab({ data, reload }) {
+  const [resetPwd, setResetPwd] = useState({})
+
+  async function handleResetPwd(id) {
+    const pwd = resetPwd[id]?.trim()
+    if (!pwd || pwd.length < 6) return
+    await saResetUserPassword(id, pwd)
+    setResetPwd(p => ({ ...p, [id]: '' }))
+    alert('Пароль сброшен.')
+  }
+
+  return (
+    <div className="sa-tab">
+      <div className="sa-list">
+        {(data || []).map(u => (
+          <div key={u.id} className="sa-row">
+            <div className="sa-row-main">
+              <span className="sa-row-login">{u.login}</span>
+              {u.display_name && <span className="sa-row-name">{u.display_name}</span>}
+              <span className={`user-role role-${u.role}`}>{u.role}</span>
+              {u.has_session && <span className="session-dot">●</span>}
+              {!u.is_active  && <span className="badge-inactive">заблокирован</span>}
+              <span className="sa-row-meta">{u.group_count} групп</span>
+            </div>
+            <div className="sa-row-actions">
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => saUpdateUser(u.id, { is_active: !u.is_active }).then(reload)}>
+                {u.is_active ? 'Блок' : 'Разблок'}
+              </button>
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => saResetUserSessions(u.id).then(reload)}>
+                ⏏ Сессия
+              </button>
+              <input className="input-inline" placeholder="Новый пароль"
+                     value={resetPwd[u.id] || ''}
+                     onChange={e => setResetPwd(p => ({ ...p, [u.id]: e.target.value }))} />
+              <button className="btn btn-warning btn-xs" onClick={() => handleResetPwd(u.id)}>
+                Сбросить пароль
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Устройства ────────────────────────────────────────────────
+function DevicesTab({ data, reload }) {
+  return (
+    <div className="sa-tab">
+      <div className="sa-list">
+        {(data || []).map(d => (
+          <div key={d.device_id} className="sa-row">
+            <div className="sa-row-main">
+              <span className={`device-dot ${d.is_online ? 'online' : 'offline'}`} />
+              <span className="sa-row-login"><code>{d.device_id}</code></span>
+              <span className="sa-row-meta">
+                {d.fw_version || '—'} · {d.last_seen
+                  ? new Date(d.last_seen).toLocaleString('ru') : 'никогда'}
+              </span>
+            </div>
+            <div className="sa-row-groups">
+              {(d.groups || []).filter(Boolean).map(g => (
+                <span key={g.group_id} className="badge-group">{g.name}</span>
+              ))}
+            </div>
+            <div className="sa-row-actions">
+              <button className="btn btn-danger btn-xs"
+                      onClick={() => { if (confirm('Удалить устройство?')) saDeleteDevice(d.device_id).then(reload) }}>
+                ✕
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Журнал ────────────────────────────────────────────────────
+function LogsTab({ data, reload }) {
+  return (
+    <div className="sa-tab">
+      <div className="sa-toolbar">
+        <button className="btn btn-outline btn-sm" onClick={reload}>↻ Обновить</button>
+      </div>
+      <div className="logs-list">
+        {(data || []).map(l => (
+          <div key={l.id} className="log-entry">
+            <span className="log-ts">{new Date(l.ts).toLocaleString('ru')}</span>
+            <span className="log-actor">{l.actor_login || '—'}</span>
+            <span className={`log-action action-${l.action}`}>{l.action}</span>
+            {l.group_name && <span className="log-group">{l.group_name}</span>}
+            {l.payload && (
+              <span className="log-payload">{JSON.stringify(l.payload).substring(0, 80)}</span>
+            )}
+            {l.ip && <span className="log-ip">{l.ip}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── SQL ───────────────────────────────────────────────────────
+function SqlTab() {
+  const [sql, setSql]       = useState('')
+  const [result, setResult] = useState(null)
+  const [error, setError]   = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  async function handleRun(e) {
+    e.preventDefault()
+    setError(null); setResult(null); setLoading(true)
+    try {
+      const data = await saQuery(sql)
+      setResult(data)
+    } catch (e) {
+      setError(e.body?.error || e.message)
     } finally {
       setLoading(false)
     }
   }
 
-  const handleCreateGroup = async () => {
-    if (!newGroup.name || !newGroup.mqtt_topic) {
-      setError('Заполните название и MQTT топик')
-      return
-    }
-    setError('')
-    try {
-      await createGroup(newGroup.name, newGroup.mqtt_topic, parseInt(newGroup.relay_duration_ms))
-      setSuccess(`Группа "${newGroup.name}" создана`)
-      setNewGroup({ name: '', mqtt_topic: '', relay_duration_ms: 500 })
-      setShowAddGroup(false)
-      loadAll()
-      setTimeout(() => setSuccess(''), 3000)
-    } catch (err) {
-      setError(err.response?.data?.message || 'Ошибка создания группы')
-    }
-  }
-
-  const handleCreateAdmin = async () => {
-    if (!newAdmin.login || !newAdmin.password) {
-      setError('Заполните логин и пароль')
-      return
-    }
-    setError('')
-    try {
-      await createAdmin(newAdmin.login, newAdmin.password, newAdmin.single_session)
-      setSuccess(`Администратор "${newAdmin.login}" создан`)
-      setNewAdmin({ login: '', password: '', single_session: true })
-      setShowAddAdmin(false)
-      loadAll()
-      setTimeout(() => setSuccess(''), 3000)
-    } catch (err) {
-      setError(err.response?.data?.message || 'Ошибка создания администратора')
-    }
-  }
-
-  const handleToggleSingleSession = async (adminId, current) => {
-    try {
-      await updateSingleSession(adminId, !current)
-      setAdmins(prev => prev.map(a =>
-        a.id === adminId ? { ...a, single_session: !current } : a
-      ))
-    } catch (err) {
-      setError(err.response?.data?.error || 'Ошибка изменения флага')
-      setTimeout(() => setError(''), 3000)
-    }
-  }
-
-  const handleAssignAdmin = async () => {
-    if (!selectedAdmin) return
-    try {
-      await assignGroupAdmin(assignModal, selectedAdmin)
-      setSuccess('Администратор назначен')
-      setAssignModal(null)
-      setSelectedAdmin('')
-      loadAll()
-      setTimeout(() => setSuccess(''), 3000)
-    } catch (err) {
-      setError('Ошибка назначения администратора')
-    }
-  }
-
-  const formatDate = (ts) => new Date(ts).toLocaleString('ru-RU', {
-    day: '2-digit', month: '2-digit',
-    hour: '2-digit', minute: '2-digit'
-  })
-
-  if (loading) return (
-    <div style={styles.container}>
-      <div style={styles.center}><p>Загрузка...</p></div>
-    </div>
-  )
-
   return (
-    <div style={styles.container}>
+    <div className="sa-tab">
+      <form onSubmit={handleRun} className="sql-form">
+        <textarea
+          className="sql-input"
+          value={sql}
+          onChange={e => setSql(e.target.value)}
+          placeholder="SELECT * FROM users LIMIT 10;"
+          rows={6}
+          spellCheck={false}
+        />
+        <button type="submit" className="btn btn-primary" disabled={loading}>
+          {loading ? 'Выполнение...' : '▶ Выполнить'}
+        </button>
+      </form>
 
-      {/* Шапка */}
-      <div style={styles.header}>
-        <button style={styles.backBtn} onClick={onBack}>← Назад</button>
-        <span style={styles.headerTitle}>👑 Суперадмин</span>
-      </div>
+      {error && <div className="sa-error sql-error">{error}</div>}
 
-      {/* Вкладки */}
-      <div style={styles.tabs}>
-        {[
-          { key: 'groups', label: '🔌 Группы' },
-          { key: 'admins', label: '👤 Админы' },
-          { key: 'logs',   label: '📋 Журнал' },
-        ].map(t => (
-          <button
-            key={t.key}
-            style={{ ...styles.tab, borderBottom: tab === t.key ? '2px solid #e94560' : 'none' }}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {error   && <p style={styles.error}>{error}</p>}
-      {success && <p style={styles.success}>{success}</p>}
-
-      <div style={styles.content}>
-
-        {/* ── Группы ─────────────────────────────────────── */}
-        {tab === 'groups' && (
-          <div style={styles.section}>
-            <button style={styles.addBtn} onClick={() => setShowAddGroup(!showAddGroup)}>
-              {showAddGroup ? '✕ Отмена' : '+ Создать группу'}
-            </button>
-
-            {showAddGroup && (
-              <div style={styles.addForm}>
-                <input
-                  style={styles.input}
-                  placeholder="Название (напр. Ворота)"
-                  value={newGroup.name}
-                  onChange={e => setNewGroup({ ...newGroup, name: e.target.value })}
-                />
-                <input
-                  style={styles.input}
-                  placeholder="MQTT топик (напр. gates)"
-                  value={newGroup.mqtt_topic}
-                  onChange={e => setNewGroup({ ...newGroup, mqtt_topic: e.target.value.toLowerCase().replace(/\s/g, '_') })}
-                  autoCapitalize="none"
-                />
-                <div style={styles.row}>
-                  <span style={styles.label}>Режим реле:</span>
-                  <select
-                    style={{ ...styles.input, flex: 1 }}
-                    value={newGroup.relay_duration_ms === 0 ? 'toggle' : 'pulse'}
-                    onChange={e => setNewGroup({
-                      ...newGroup,
-                      relay_duration_ms: e.target.value === 'toggle' ? 0 : 500
-                    })}
-                  >
-                    <option value="pulse">⚡ Импульс</option>
-                    <option value="toggle">○ Триггер (вкл/выкл)</option>
-                  </select>
-                </div>
-                {newGroup.relay_duration_ms > 0 && (
-                  <div style={styles.row}>
-                    <span style={styles.label}>Длительность, мс:</span>
-                    <input
-                      style={{ ...styles.input, flex: 1 }}
-                      type="number"
-                      min="100"
-                      max="10000"
-                      value={newGroup.relay_duration_ms}
-                      onChange={e => setNewGroup({ ...newGroup, relay_duration_ms: parseInt(e.target.value) })}
-                    />
-                  </div>
-                )}
-                <button style={styles.saveBtn} onClick={handleCreateGroup}>
-                  Создать
-                </button>
-              </div>
-            )}
-
-            <div style={styles.list}>
-              {groups.map(g => (
-                <div key={g.id} style={styles.card}>
-                  <div style={styles.cardHeader}>
-                    <span style={styles.cardTitle}>{g.name}</span>
-                    <span style={styles.badge}>
-                      {g.relay_duration_ms > 0 ? `⚡ ${g.relay_duration_ms}мс` : '○ Триггер'}
-                    </span>
-                  </div>
-                  <div style={styles.cardMeta}>
-                    <span style={styles.metaText}>📡 {g.mqtt_topic}</span>
-                    <span style={styles.metaText}>👥 {g.member_count} польз.</span>
-                  </div>
-                  {g.admins && g.admins.length > 0 && (
-                    <div style={styles.adminsList}>
-                      <span style={styles.adminsLabel}>Администраторы: </span>
-                      {g.admins.map(a => (
-                        <span key={a.id} style={styles.adminTag}>{a.login}</span>
+      {result && (
+        <div className="sql-result">
+          <div className="sql-count">{result.count} строк</div>
+          {result.rows?.length > 0 && (
+            <div className="sql-table-wrap">
+              <table className="sql-table">
+                <thead>
+                  <tr>{Object.keys(result.rows[0]).map(k => <th key={k}>{k}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {result.rows.map((row, i) => (
+                    <tr key={i}>
+                      {Object.values(row).map((v, j) => (
+                        <td key={j}>{v === null ? <i>null</i> : String(v).substring(0, 100)}</td>
                       ))}
-                    </div>
-                  )}
-                  <button
-                    style={styles.assignBtn}
-                    onClick={() => { setAssignModal(g.id); setSelectedAdmin('') }}
-                  >
-                    Назначить администратора
-                  </button>
-                </div>
-              ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </div>
-        )}
-
-        {/* ── Администраторы ──────────────────────────────── */}
-        {tab === 'admins' && (
-          <div style={styles.section}>
-            <button style={styles.addBtn} onClick={() => setShowAddAdmin(!showAddAdmin)}>
-              {showAddAdmin ? '✕ Отмена' : '+ Создать администратора'}
-            </button>
-
-            {showAddAdmin && (
-              <div style={styles.addForm}>
-                <input
-                  style={styles.input}
-                  placeholder="Логин"
-                  value={newAdmin.login}
-                  onChange={e => setNewAdmin({ ...newAdmin, login: e.target.value })}
-                  autoCapitalize="none"
-                />
-                <input
-                  style={styles.input}
-                  type="password"
-                  placeholder="Пароль"
-                  value={newAdmin.password}
-                  onChange={e => setNewAdmin({ ...newAdmin, password: e.target.value })}
-                />
-                <label style={styles.checkRow}>
-                  <input
-                    type="checkbox"
-                    checked={newAdmin.single_session}
-                    onChange={e => setNewAdmin({ ...newAdmin, single_session: e.target.checked })}
-                  />
-                  <span style={styles.checkLabel}>Одна сессия (один вход)</span>
-                </label>
-                <button style={styles.saveBtn} onClick={handleCreateAdmin}>
-                  Создать
-                </button>
-              </div>
-            )}
-
-            <div style={styles.list}>
-              {admins.map(a => (
-                <div key={a.id} style={styles.userRow}>
-                  <span style={styles.userName}>{a.login}</span>
-                  <div style={styles.userActions}>
-                    <span style={styles.metaText}>{formatDate(a.created_at)}</span>
-                    <label style={styles.toggleRow}>
-                      <input
-                        type="checkbox"
-                        checked={!!a.single_session}
-                        onChange={() => handleToggleSingleSession(a.id, !!a.single_session)}
-                      />
-                      <span style={{ ...styles.metaText, marginLeft: 4 }}>1 сессия</span>
-                    </label>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── Журнал ──────────────────────────────────────── */}
-        {tab === 'logs' && (
-          <div style={styles.section}>
-            <div style={styles.list}>
-              {logs.length === 0 && (
-                <p style={{ color: '#aaa', textAlign: 'center', padding: '20px' }}>
-                  Журнал пуст
-                </p>
-              )}
-              {logs.map(log => (
-                <div key={log.id} style={styles.logRow}>
-                  <span style={styles.logTime}>{formatDate(log.ts)}</span>
-                  <span style={styles.logUser}>{log.actor_login}</span>
-                  <span style={styles.logAction}>{log.action}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Модальное окно назначения администратора */}
-      {assignModal && (
-        <div style={styles.modalOverlay}>
-          <div style={styles.modal}>
-            <h3 style={styles.modalTitle}>Назначить администратора</h3>
-            <select
-              style={styles.input}
-              value={selectedAdmin}
-              onChange={e => setSelectedAdmin(e.target.value)}
-            >
-              <option value="">— Выберите администратора —</option>
-              {admins.filter(a => a.login !== 'superadmin').map(a => (
-                <option key={a.id} value={a.id}>{a.login}</option>
-              ))}
-            </select>
-            <div style={styles.modalButtons}>
-              <button style={styles.cancelBtn} onClick={() => setAssignModal(null)}>
-                Отмена
-              </button>
-              <button style={styles.saveBtn} onClick={handleAssignAdmin}>
-                Назначить
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       )}
     </div>
   )
-}
-
-const styles = {
-  container: { display: 'flex', flexDirection: 'column', height: '100vh', background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)' },
-  header: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: '#0f3460', boxShadow: '0 2px 8px rgba(0,0,0,0.3)', minHeight: '56px' },
-  headerTitle: { fontSize: '16px', fontWeight: 'bold', color: '#eee' },
-  backBtn: { background: 'transparent', color: '#e94560', fontSize: '16px', padding: '4px 8px', borderRadius: '8px' },
-  tabs: { display: 'flex', background: '#16213e', borderBottom: '1px solid #1a4a7a' },
-  tab: { flex: 1, padding: '12px', background: 'transparent', color: '#eee', fontSize: '13px', borderRadius: 0 },
-  content: { flex: 1, overflowY: 'auto' },
-  section: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
-  addBtn: { background: '#1a4a7a', color: 'white', padding: '12px', borderRadius: '8px', fontSize: '15px', width: '100%' },
-  addForm: { background: '#0f3460', borderRadius: '12px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' },
-  input: { padding: '12px', borderRadius: '8px', border: '1px solid #1a4a7a', background: '#16213e', color: '#eee', fontSize: '15px', width: '100%' },
-  saveBtn: { background: '#e94560', color: 'white', padding: '12px', borderRadius: '8px', fontSize: '15px', fontWeight: 'bold' },
-  checkRow: { display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', padding: '4px 0' },
-  checkLabel: { color: '#eee', fontSize: '14px' },
-  list: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  card: { background: '#0f3460', borderRadius: '12px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '8px' },
-  cardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  cardTitle: { fontSize: '16px', fontWeight: 'bold' },
-  badge: { fontSize: '12px', background: '#1a4a7a', padding: '4px 10px', borderRadius: '12px', color: '#eee' },
-  cardMeta: { display: 'flex', gap: '12px' },
-  metaText: { fontSize: '12px', color: '#aaa' },
-  assignBtn: { background: '#1a4a7a', color: 'white', padding: '8px 12px', borderRadius: '8px', fontSize: '13px', alignSelf: 'flex-start' },
-  userRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f3460', borderRadius: '10px', padding: '12px 16px' },
-  userName: { fontSize: '15px' },
-  userActions: { display: 'flex', alignItems: 'center', gap: '12px' },
-  toggleRow: { display: 'flex', alignItems: 'center', cursor: 'pointer' },
-  logRow: { display: 'flex', gap: '8px', alignItems: 'center', background: '#0f3460', borderRadius: '10px', padding: '10px 12px', flexWrap: 'wrap' },
-  logTime: { fontSize: '12px', color: '#aaa', whiteSpace: 'nowrap' },
-  logUser: { fontSize: '13px', color: '#e94560', fontWeight: 'bold' },
-  logAction: { fontSize: '13px', color: '#eee' },
-  row: { display: 'flex', alignItems: 'center', gap: '10px' },
-  label: { fontSize: '14px', color: '#aaa', whiteSpace: 'nowrap' },
-  error: { color: '#e94560', padding: '8px 16px', fontSize: '14px' },
-  success: { color: '#27ae60', padding: '8px 16px', fontSize: '14px' },
-  center: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 100 },
-  modal: { background: '#0f3460', borderRadius: '16px', padding: '24px', width: '100%', maxWidth: '360px', display: 'flex', flexDirection: 'column', gap: '16px' },
-  modalTitle: { fontSize: '18px', fontWeight: 'bold', textAlign: 'center' },
-  modalButtons: { display: 'flex', gap: '10px' },
-  cancelBtn: { flex: 1, background: '#1a4a7a', color: 'white', padding: '12px', borderRadius: '8px', fontSize: '15px' },
-  adminsList: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' },
-  adminsLabel: { fontSize: '12px', color: '#aaa' },
-  adminTag: { fontSize: '12px', background: '#e9456033', color: '#e94560', padding: '2px 8px', borderRadius: '10px', border: '1px solid #e9456066' },
 }

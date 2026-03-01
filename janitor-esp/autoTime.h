@@ -1,7 +1,6 @@
 #pragma once
 #include <GyverPortal.h>
 
-//extern GyverPortal ui;
 #define MINUTES *3600L
 
 namespace EspTime {
@@ -12,9 +11,7 @@ namespace EspTime {
     inline bool isSynced(){
         return time(nullptr) > _2025_01_01_00_00_;
     }
-    // static constexpr uint32_t INVALID_OFFSET = 0x7FFFFFFF;
-    // static int32_t _timeoffset = INVALID_OFFSET;
-    // bool tzConfigured(){ return _timeoffset != INVALID_OFFSET; }
+
     inline bool tzConfigured(){ 
         auto _ptr = getenv("TZ");
         return _ptr != nullptr && _ptr[0] != '\0';
@@ -40,10 +37,6 @@ inline void timeTo(Stream& s) {
         // Рассчитываем миллисекунды из микросекунд
         long milliseconds = tv.tv_usec / 1000;
         auto tzStr = getenv("TZ") ? getenv("TZ") : "GMT";
-        
-
-        // char tz_name[10];
-        // strftime(tz_name, sizeof(tz_name), "%Z", timeinfo);
 
         s.printf("Local time: %02d:%02d:%02d.%03ld %s\n",
                 timeinfo->tm_hour, 
@@ -125,14 +118,6 @@ window.onload = function() {
 )raw";
 
 
-/*     fetch(`/set_time?utc=${utcSeconds}&offset=${offsetMinutes}&tz=${encodeURIComponent(posix)}`)
-        .then(r => console.log(r.statusText))
-        .catch(e => console.log(e));
-         */
-
-
-    //static bool tzConfigured = false; // флаг: TZ уже установлен (сбрасывается при перезагрузке)
-
     inline void handler(ESP8266WebServer& s, const char* ntp1 = "ru.pool.ntp.org", const char* ntp2 = nullptr, const char* ntp3 = nullptr) {
         s.on("/set_time", [&s, ntp1, ntp2, ntp3]() {
 
@@ -142,9 +127,7 @@ window.onload = function() {
             }
 
             String tz = s.arg("tz");
-            //EspTime::_timeoffset = s.arg("offset").toInt();
                         
-
             // Устанавливаем начальное время из браузера (чтобы часы сразу пошли правильно)
             if (s.hasArg("utc")) {
                 time_t utc = (time_t)s.arg("utc").toInt();
@@ -156,17 +139,12 @@ window.onload = function() {
             if (EspTime::tzConfigured()) {
                 configTime( EspTime::getTz(), ntp1, ntp2, ntp3);
 
-                // s.send(200);
-                // return;
             } else {
                 // (Пере)запускаем NTP с нулевым смещением (встроенный SNTP будет обновлять время)
                 configTime(0, 0, ntp1, ntp2, ntp3);
                 // Устанавливаем временную зону через переменную окружения
                 EspTime::setTz( tz.c_str());
             }
-            // setenv("TZ", tz.c_str(), 1);
-            // tzset();
-
 
             s.send(200);
         });

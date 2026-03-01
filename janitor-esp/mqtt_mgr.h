@@ -26,7 +26,7 @@ public:
 
     // Настраиваем WiFi клиент
     if (cfg.tls_secure && Storage.hasCert()) {
-      Serial.println("[MQTT] TLS mode: secure (CA cert)");
+      Serial.println(F("[MQTT] TLS mode: secure (CA cert)"));
       uint8_t* certBuf;
       size_t   certLen;
       if (Storage.loadCert(&certBuf, &certLen)) {
@@ -40,7 +40,7 @@ public:
       }
       _mqtt.setClient(_secureClient);
     } else {
-      Serial.println("[MQTT] TLS mode: insecure");
+      Serial.println(F("[MQTT] TLS mode: insecure"));
       _insecureClient.setInsecure();
       _mqtt.setClient(_insecureClient);
     }
@@ -57,8 +57,9 @@ public:
 
   // Регистрация реле — обновлённая версия
   bool registerRelay(uint8_t relayIndex) {
+    if ( ! _cfg->relays[ relayIndex].isValid() ) return false;
 
-    if (relayIndex >= _cfg->relay_count ) return false;
+    //if (relayIndex >= _cfg->relay_count ) return false;
     const char* code = _cfg->relays[relayIndex].mqtt_code;
     if (strlen(code) != 6) return false;
 
@@ -125,7 +126,7 @@ public:
   // Подключиться к MQTT брокеру
   bool connect() {
     if (!strlen(_cfg->mqtt_user)) {
-      Serial.println("[MQTT] No credentials, skip connect");
+      Serial.println(F("[MQTT] No credentials, skip connect"));
       return false;
     }
 
@@ -156,19 +157,26 @@ public:
       return false;
     }
 
-    Serial.println("[MQTT] Connected!");
+    Serial.println(F("[MQTT] Connected!"));
     Led.setMode( LedManager::RUNNING);
 
     // Публикуем онлайн статус
     _publishOnline(mac);
 
     // Подписываемся на топики команд для каждого реле
-    for (uint8_t i = 0; i < _cfg->relay_count ; i++) {
+    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+
+      if ( ! _cfg->relays[i].isValid() ) continue;
       // Топик: relay/{groupTopic}/trigger
       // groupTopic берём из конфига (заполняется при регистрации)
-      String topic = String("relay/") + _getGroupTopic(i) + "/trigger";
-      _mqtt.subscribe(topic.c_str(), 1);
-      Serial.printf("[MQTT] Subscribed: %s\n", topic.c_str());
+      String topic = _getGroupTopic(i);
+      if ( topic.isEmpty() ) {
+        Serial.printf("[MQTT] Skip unregistred %s\n", _cfg->relays[i].name ); 
+        continue;
+      }
+      String uri = String("relay/") + topic + "/trigger";
+      _mqtt.subscribe(uri.c_str(), 1);
+      Serial.printf("[MQTT] Subscribed: %s\n", uri.c_str());
     }
 
     _lastHeartbeat = millis();
@@ -188,9 +196,11 @@ void tick() {
           if (_authFailCount >= 3) {
             // Credentials устарели — перерегистрируемся по новому коду
             // Код должен быть введён через портал заранее
-            Serial.println("[MQTT] Trying re-register with saved code...");
+            Serial.println(F("[MQTT] Trying re-register with saved code..."));
             bool reregistered = false;
-            for (uint8_t i = 0; i < _cfg-> relay_count ; i++) {
+            for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+              if ( ! _cfg->relays[i].isValid() ) continue;
+
               if (strlen(_cfg->relays[i].mqtt_code) == 6) {
                 if (registerRelay(i)) {
 
@@ -207,7 +217,7 @@ void tick() {
           }
         }
 
-        Serial.println("[MQTT] Reconnecting...");
+        Serial.println(F("[MQTT] Reconnecting..."));
         Led.setMode( LedManager::CONNECTING );
         if (connect()) {
           _authFailCount = 0;
@@ -262,7 +272,7 @@ private:
     String name = _cfg->relays[index].name;
     int sep = name.indexOf('|');
     if (sep >= 0) return name.substring(sep + 1);
-    return name; // fallback
+    return ""; // fallback
   }
 
   void _onMessage(char* topic, byte* payload, unsigned int len) {
@@ -280,7 +290,9 @@ private:
     uint32_t    duration = doc["duration"] | 0;
 
     // Находим нужное реле по топику
-    for (uint8_t i = 0; i < _cfg-> relay_count ; i++) {
+    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+      if ( ! _cfg->relays[i].isValid() ) continue;
+
       String expected = String("relay/") + _getGroupTopic(i) + "/trigger";
       if (topicStr != expected) continue;
 
