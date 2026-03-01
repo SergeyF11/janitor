@@ -1,228 +1,188 @@
-import { useState, useEffect, useRef } from 'react'
-import { getMyGroups } from '../api'
-import ButtonGrid from '../components/ButtonGrid'
-import ExpiryWarning from '../components/ExpiryWarning'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { getMyGroups, getMyProfile, triggerRelay, logout, createWsConnection } from '../api'
 
-export default function Main({ user, onLogout, onAdminTab, onSuperAdminTab  }) {
-  const [groups, setGroups] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+export default function Main({ user, onLogout }) {
+  const [groups, setGroups]       = useState([])
+  const [profile, setProfile]     = useState(null)
+  const [loading, setLoading]     = useState(true)
+  const [pressing, setPressing]   = useState({})   // groupId → bool
+  const [statuses, setStatuses]   = useState({})   // mqttTopic → { state, online }
+  const [showProfile, setShowProfile] = useState(false)
   const wsRef = useRef(null)
 
-  // Загрузить группы при открытии страницы
-  useEffect(() => {
-    loadGroups()
-    connectWebSocket()
-
-    return () => {
-      // Отключить WebSocket при уходе со страницы
-      if (wsRef.current) wsRef.current.close()
-    }
-  }, [])
-
-  const loadGroups = async () => {
+  const loadData = useCallback(async () => {
     try {
-      const res = await getMyGroups()
-      setGroups(res.data)
+      const [g, p] = await Promise.all([getMyGroups(), getMyProfile()])
+      setGroups(g)
+      setProfile(p)
+      // Инициализировать статусы из данных групп
+      const init = {}
+      g.forEach(gr => {
+        init[gr.mqtt_topic] = {
+          state:  gr.relay_state || 'off',
+          online: gr.device_online || false,
+        }
+      })
+      setStatuses(init)
     } catch (err) {
-      setError('Не удалось загрузить группы')
+      console.error('load error', err)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  // WebSocket для получения статусов реле в реальном времени
-  const connectWebSocket = () => {
-    const token = localStorage.getItem('token')
-    const wsUrl = `wss://smilart.ru/janitor/ws?token=${token}`
+  // WebSocket для realtime обновлений
+  useEffect(() => {
+    loadData()
 
+    const ws = createWsConnection((msg) => {
+      if (msg.type === 'relay_status') {
+        setStatuses(s => ({
+          ...s,
+          [msg.topic]: { ...s[msg.topic], state: msg.state }
+        }))
+      }
+      if (msg.type === 'device_status') {
+        setGroups(g => g.map(gr => {
+          const dg = gr.device_id === msg.device_id
+          return dg ? { ...gr, device_online: msg.online } : gr
+        }))
+      }
+    })
+    wsRef.current = ws
+
+    return () => ws.close()
+  }, [loadData])
+
+  async function handleTrigger(group) {
+    if (pressing[group.id]) return
+    setPressing(p => ({ ...p, [group.id]: true }))
     try {
-      const ws = new WebSocket(wsUrl)
-      wsRef.current = ws
-
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-        if (data.type === 'relay_status') {
-          // Обновить состояние конкретной группы
-          setGroups(prev => prev.map(g =>
-            g.mqtt_topic === data.topic
-              ? { ...g, relay_state: data.state === 'on' }
-              : g
-          ))
-        }
-      }
-
-      ws.onerror = () => {
-        // Тихая ошибка — кнопки работают и без WebSocket
-        console.log('WebSocket недоступен')
-      }
-    } catch (e) {
-      console.log('WebSocket не поддерживается')
+      const result = await triggerRelay(group.id)
+      setStatuses(s => ({
+        ...s,
+        [group.mqtt_topic]: { ...s[group.mqtt_topic], state: result.state }
+      }))
+    } catch (err) {
+      console.error('trigger error', err)
+    } finally {
+      // Небольшая задержка для визуальной обратной связи
+      setTimeout(() => setPressing(p => ({ ...p, [group.id]: false })), 300)
     }
   }
 
-  // Обновить состояние кнопки после нажатия
-  const handleStateChange = (groupId, newState) => {
-    setGroups(prev => prev.map(g =>
-      g.id === groupId ? { ...g, relay_state: newState } : g
-    ))
+  async function handleLogout() {
+    await logout()
+    onLogout()
   }
 
-  const isAdmin = user.role === 'admin' || user.role === 'superadmin'
+  if (loading) {
+    return (
+      <div className="app-loading">
+        <div className="spinner" />
+      </div>
+    )
+  }
 
   return (
-    <div style={styles.container}>
+    <div className="main-screen">
       {/* Шапка */}
-      <div style={styles.header}>
-        <span style={styles.headerTitle}>🔑 Привратник</span>
-        <div style={styles.headerRight}>
-          {user.role === 'superadmin' && (
-            <button style={styles.adminBtn} onClick={onSuperAdminTab}>
-              👑
-            </button>
-          )}
-          {(user.role === 'admin' || user.role === 'superadmin') && (
-            <button style={styles.adminBtn} onClick={onAdminTab}>
-              ⚙️
-            </button>
-          )}
-          <button style={styles.logoutBtn} onClick={onLogout}>
+      <header className="main-header">
+        <h1 className="main-title">Привратник</h1>
+        <button
+          className="btn-icon"
+          onClick={() => setShowProfile(p => !p)}
+          title="Профиль"
+        >
+          👤
+        </button>
+      </header>
+
+      {/* Профиль */}
+      {showProfile && (
+        <div className="profile-panel">
+          <div className="profile-info">
+            <div className="profile-login">{profile?.login}</div>
+            {profile?.display_name && (
+              <div className="profile-name">{profile.display_name}</div>
+            )}
+            <div className="profile-id">
+              <span className="profile-id-label">Ваш ID:</span>
+              <code className="profile-id-value">{profile?.id}</code>
+              <button
+                className="btn-copy"
+                onClick={() => navigator.clipboard?.writeText(profile?.id)}
+                title="Скопировать"
+              >
+                📋
+              </button>
+            </div>
+          </div>
+          <button className="btn btn-outline btn-sm" onClick={handleLogout}>
             Выйти
           </button>
         </div>
-      </div>
+      )}
 
-      {/* Предупреждения о сроке */}
-      <ExpiryWarning groups={groups} />
-
-      {/* Основная область с кнопками */}
-      <div style={styles.content}>
-        {loading && (
-          <div style={styles.center}>
-            <p>Загрузка...</p>
+      {/* Группы / кнопки */}
+      <div className="groups-list">
+        {groups.length === 0 && (
+          <div className="empty-state">
+            <p>Нет доступных групп.</p>
+            <p className="empty-hint">Обратитесь к администратору.</p>
           </div>
         )}
 
-        {error && (
-          <div style={styles.center}>
-            <p style={{ color: '#e94560' }}>{error}</p>
-            <button style={styles.retryBtn} onClick={loadGroups}>
-              Повторить
-            </button>
-          </div>
-        )}
+        {groups.map(group => {
+          const status  = statuses[group.mqtt_topic] || {}
+          const online  = status.online || group.device_online
+          const state   = status.state
+          const isPulse = group.relay_duration_ms > 0
+          const isOn    = state === 'on'
+          const busy    = pressing[group.id]
 
-        {!loading && !error && groups.length === 0 && (
-          <div style={styles.center}>
-            <p style={{ color: '#aaa' }}>Нет доступных каналов</p>
-          </div>
-        )}
+          return (
+            <div key={group.id} className="group-card">
+              {/* Заголовок группы */}
+              <div className="group-header">
+                <div className="group-name">{group.name}</div>
+                <div className={`device-dot ${online ? 'online' : 'offline'}`}
+                     title={online ? 'Устройство онлайн' : 'Устройство оффлайн'} />
+              </div>
 
-        {/* Все группы заблокированы */}
-        {!loading && !error && groups.length > 0 &&
-         groups.every(g => g.status === 'blocked') && (
-          <div style={styles.blocked}>
-            <span style={{ fontSize: '64px' }}>🔒</span>
-            <h2 style={styles.blockedTitle}>Доступ заблокирован</h2>
-            <p style={styles.blockedText}>
-              Срок действия истёк.{'\n'}Обратитесь к администратору.
-            </p>
-          </div>
-        )}
+              {group.description && (
+                <div className="group-description">{group.description}</div>
+              )}
 
-        {!loading && !error && groups.length > 0 &&
-         !groups.every(g => g.status === 'blocked') && (
-          <ButtonGrid
-            groups={groups.filter(g => g.status !== 'blocked')}
-            onStateChange={handleStateChange}
-          />
-        )}
+              {/* Кнопка управления */}
+              <button
+                className={[
+                  'relay-btn',
+                  isPulse ? 'relay-pulse' : (isOn ? 'relay-on' : 'relay-off'),
+                  busy ? 'relay-busy' : '',
+                  !online ? 'relay-offline' : '',
+                ].join(' ')}
+                onClick={() => handleTrigger(group)}
+                disabled={busy}
+              >
+                {busy ? (
+                  <span className="relay-btn-spinner" />
+                ) : isPulse ? (
+                  '▶ Открыть'
+                ) : isOn ? (
+                  '● Включено'
+                ) : (
+                  '○ Выключено'
+                )}
+              </button>
+
+              {!online && (
+                <div className="group-offline-hint">Устройство недоступно</div>
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
-}
-
-const styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100vh',
-    background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '12px 16px',
-    background: '#0f3460',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-    minHeight: '56px',
-  },
-  headerTitle: {
-    fontSize: '18px',
-    fontWeight: 'bold',
-    color: '#e94560',
-  },
-  headerRight: {
-    display: 'flex',
-    gap: '8px',
-    alignItems: 'center',
-  },
-  adminBtn: {
-    background: '#1a4a7a',
-    color: 'white',
-    padding: '8px 12px',
-    borderRadius: '8px',
-    fontSize: '18px',
-  },
-  logoutBtn: {
-    background: 'transparent',
-    color: '#aaa',
-    padding: '8px 12px',
-    borderRadius: '8px',
-    fontSize: '14px',
-    border: '1px solid #333',
-  },
-  content: {
-    flex: 1,
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  center: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '16px',
-  },
-  retryBtn: {
-    background: '#e94560',
-    color: 'white',
-    padding: '10px 24px',
-    borderRadius: '8px',
-    fontSize: '16px',
-  },
-  blocked: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '16px',
-    padding: '32px',
-    textAlign: 'center',
-  },
-  blockedTitle: {
-    fontSize: '22px',
-    fontWeight: 'bold',
-    color: '#e94560',
-  },
-  blockedText: {
-    fontSize: '16px',
-    color: '#aaa',
-    lineHeight: 1.6,
-    whiteSpace: 'pre-line',
-  },
 }

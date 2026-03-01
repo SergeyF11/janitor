@@ -1,62 +1,91 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import {
+  refreshOnStartup, setLogoutCallback, setAccessToken,
+  cancelRefresh, getMe
+} from './api'
 import Login from './pages/Login'
+import ChangePassword from './pages/ChangePassword'
 import Main from './pages/Main'
 import Admin from './pages/Admin'
-import SuperAdmin from './pages/SuperAdmin'
-import ChangePassword from './pages/ChangePassword'
-import { logout } from './api'
+import './App.css'
 
 export default function App() {
-  const savedUser = localStorage.getItem('user')
-  const [user, setUser] = useState(savedUser ? JSON.parse(savedUser) : null)
-  const [page, setPage] = useState('main')
+  const [state, setState]   = useState('loading')  // loading | login | change_password | main | admin
+  const [user, setUser]     = useState(null)
+  const [error, setError]   = useState(null)
 
-  const handleLogin = (userData) => {
-    localStorage.setItem('user', JSON.stringify(userData))
-    setUser(userData)
-    setPage('main')
-  }
-
-const handleLogout = async () => {
-    try {
-      await logout()
-    } catch (e) {
-      // игнорируем ошибки при выходе
-    }
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+  const handleLogout = useCallback(() => {
+    cancelRefresh()
+    setAccessToken(null)
     setUser(null)
-    setPage('main')
+    setState('login')
+  }, [])
+
+  useEffect(() => {
+    setLogoutCallback(handleLogout)
+
+    // Попытаться восстановить сессию при загрузке
+    refreshOnStartup().then(async (ok) => {
+      if (ok) {
+        try {
+          const me = await getMe()
+          setUser(me)
+          if (me.must_change_password) {
+            setState('change_password')
+          } else if (me.role === 'admin' || me.role === 'superadmin') {
+            setState('admin')
+          } else {
+            setState('main')
+          }
+        } catch {
+          setState('login')
+        }
+      } else {
+        setState('login')
+      }
+    })
+  }, [handleLogout])
+
+  const handleLoginSuccess = useCallback((data) => {
+    setUser(data.user)
+    setError(null)
+    if (data.user.must_change_password) {
+      setState('change_password')
+    } else if (data.user.role === 'admin' || data.user.role === 'superadmin') {
+      setState('admin')
+    } else {
+      setState('main')
+    }
+  }, [])
+
+  const handlePasswordChanged = useCallback((data) => {
+    setUser(data.user)
+    if (data.user.role === 'admin' || data.user.role === 'superadmin') {
+      setState('admin')
+    } else {
+      setState('main')
+    }
+  }, [])
+
+  if (state === 'loading') {
+    return (
+      <div className="app-loading">
+        <div className="spinner" />
+      </div>
+    )
   }
 
-  const handlePasswordChanged = () => {
-    // Обновить user в state — убрать флаг must_change_password
-    const updated = { ...user, must_change_password: false }
-    localStorage.setItem('user', JSON.stringify(updated))
-    setUser(updated)
+  if (state === 'login') {
+    return <Login onSuccess={handleLoginSuccess} />
   }
 
-  if (!user) return <Login onLogin={handleLogin} />
-
-  // Обязательная смена пароля
-  if (user.must_change_password) {
-    return <ChangePassword onSuccess={handlePasswordChanged} />
+  if (state === 'change_password') {
+    return <ChangePassword user={user} onSuccess={handlePasswordChanged} />
   }
 
-  if (page === 'admin') return (
-    <Admin user={user} onBack={() => setPage('main')} />
-  )
+  if (state === 'admin') {
+    return <Admin user={user} onLogout={handleLogout} />
+  }
 
-  if (page === 'superadmin') return (
-    <SuperAdmin user={user} onBack={() => setPage('main')} />
-  )
-
-  return (
-    <Main
-      user={user}
-      onLogout={handleLogout}
-      onAdminTab={() => setPage('admin')}
-      onSuperAdminTab={() => setPage('superadmin')}
-    />
-  )
+  return <Main user={user} onLogout={handleLogout} />
 }

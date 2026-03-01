@@ -1,361 +1,354 @@
-import DeviceToken from '../components/DeviceToken'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
-  getAdminGroups, getGroupUsers,
-  addUserToGroup, removeUserFromGroup,
-  getGroupLogs, resetUserSession,
-  updateGroup, updateSingleSession
+  getAdminGroups, getGroupUsers, createUser, addUserById,
+  updateUserDescription, removeUserFromGroup, resetUserSessions,
+  updateSingleSession, getGroupDevice, generateDeviceToken,
+  getGroupLogs, logout
 } from '../api'
 
-export default function Admin({ user, onBack }) {
-  const [groups, setGroups] = useState([])
-  const [selectedGroup, setSelectedGroup] = useState(null)
-  const [users, setUsers] = useState([])
-  const [logs, setLogs] = useState([])
-  const [tab, setTab] = useState('users')
-  const [loading, setLoading] = useState(true)
+export default function Admin({ user, onLogout }) {
+  const [groups, setGroups]         = useState([])
+  const [selected, setSelected]     = useState(null)  // выбранная группа
+  const [tab, setTab]               = useState('users')  // users | device | logs
+  const [users, setUsers]           = useState([])
+  const [device, setDevice]         = useState(null)
+  const [logs, setLogs]             = useState([])
+  const [loading, setLoading]       = useState(true)
   const [showAddUser, setShowAddUser] = useState(false)
-  const [newUser, setNewUser] = useState({ login: '', password: '', role: 'user', single_session: true })
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [addMode, setAddMode]       = useState('new')  // new | existing
+  const [newUser, setNewUser]       = useState({ login: '', password: '', role: 'user', description: '', single_session: true })
+  const [existingUser, setExistingUser] = useState({ user_id: '', description: '' })
+  const [addError, setAddError]     = useState(null)
+  const [saving, setSaving]         = useState(false)
+
+  const loadGroups = useCallback(async () => {
+    try {
+      const g = await getAdminGroups()
+      setGroups(g)
+      if (g.length > 0 && !selected) setSelected(g[0])
+    } catch {}
+    setLoading(false)
+  }, [selected])
 
   useEffect(() => { loadGroups() }, [])
 
-  useEffect(() => {
-    if (selectedGroup) {
-      loadUsers(selectedGroup.id)
-      loadLogs(selectedGroup.id)
+  const loadTabData = useCallback(async () => {
+    if (!selected) return
+    if (tab === 'users') {
+      const u = await getGroupUsers(selected.id)
+      setUsers(u)
+    } else if (tab === 'device') {
+      const d = await getGroupDevice(selected.id)
+      setDevice(d)
+    } else if (tab === 'logs') {
+      const l = await getGroupLogs(selected.id)
+      setLogs(l)
     }
-  }, [selectedGroup])
+  }, [selected, tab])
 
-  const loadGroups = async () => {
-    try {
-      const res = await getAdminGroups()
-      setGroups(res.data)
-      if (res.data.length > 0) setSelectedGroup(res.data[0])
-    } catch (err) {
-      setError('Не удалось загрузить группы')
-    } finally {
-      setLoading(false)
-    }
-  }
+  useEffect(() => { loadTabData() }, [loadTabData])
 
-  const loadUsers = async (groupId) => {
+  async function handleAddUser(e) {
+    e.preventDefault()
+    setAddError(null)
+    setSaving(true)
     try {
-      const res = await getGroupUsers(groupId)
-      setUsers(res.data)
-    } catch (err) {
-      setError('Не удалось загрузить пользователей')
-    }
-  }
-
-  const loadLogs = async (groupId) => {
-    try {
-      const res = await getGroupLogs(groupId)
-      setLogs(res.data)
-    } catch (err) {
-      console.log('Ошибка загрузки логов')
-    }
-  }
-
-  const handleAddUser = async () => {
-    if (!newUser.login || !newUser.password) {
-      setError('Заполните логин и пароль')
-      return
-    }
-    setError('')
-    try {
-      await addUserToGroup(
-        selectedGroup.id,
-        newUser.login,
-        newUser.password,
-        newUser.role,
-        newUser.role === 'user' ? true : newUser.single_session
-      )
-      setSuccess(`Пользователь ${newUser.login} добавлен`)
-      setNewUser({ login: '', password: '', role: 'user', single_session: true })
+      if (addMode === 'new') {
+        await createUser(selected.id, newUser)
+        setNewUser({ login: '', password: '', role: 'user', description: '', single_session: true })
+      } else {
+        await addUserById(selected.id, existingUser.user_id.trim(), existingUser.description)
+        setExistingUser({ user_id: '', description: '' })
+      }
       setShowAddUser(false)
-      loadUsers(selectedGroup.id)
-      setTimeout(() => setSuccess(''), 3000)
+      loadTabData()
     } catch (err) {
-      setError(err.response?.data?.message || 'Ошибка при добавлении пользователя')
+      if (err.message === 'login_taken')      setAddError('Логин уже занят.')
+      else if (err.message === 'already_in_group') setAddError('Пользователь уже в группе.')
+      else if (err.message === 'user_not_found')   setAddError('Пользователь не найден.')
+      else if (err.message === 'quota_exceeded')   setAddError(err.body?.message || 'Квота исчерпана.')
+      else setAddError('Ошибка. Попробуйте ещё раз.')
+    } finally {
+      setSaving(false)
     }
   }
 
-  const handleRemoveUser = async (userId, login) => {
-    if (!confirm(`Удалить ${login} из группы?`)) return
-    try {
-      await removeUserFromGroup(selectedGroup.id, userId)
-      loadUsers(selectedGroup.id)
-    } catch (err) {
-      setError('Ошибка при удалении')
-    }
+  async function handleRemoveUser(userId) {
+    if (!confirm('Удалить пользователя из группы?')) return
+    await removeUserFromGroup(selected.id, userId)
+    loadTabData()
   }
 
-  const handleResetSession = async (userId, login) => {
-    if (!confirm(`Сбросить сессию ${login}?`)) return
-    try {
-      await resetUserSession(userId)
-      setSuccess(`Сессия ${login} сброшена`)
-      loadUsers(selectedGroup.id)
-      setTimeout(() => setSuccess(''), 3000)
-    } catch (err) {
-      setError('Ошибка сброса сессии')
-    }
+  async function handleResetSession(userId) {
+    await resetUserSessions(userId)
+    loadTabData()
   }
 
-  const handleToggleSingleSession = async (userId, current) => {
-    try {
-      await updateSingleSession(userId, !current)
-      setUsers(prev => prev.map(u =>
-        u.id === userId ? { ...u, single_session: !current } : u
-      ))
-    } catch (err) {
-      setError(err.response?.data?.error || 'Ошибка изменения флага')
-      setTimeout(() => setError(''), 3000)
-    }
+  async function handleToggleSingleSession(userId, current) {
+    await updateSingleSession(userId, !current)
+    loadTabData()
   }
 
-  const formatDate = (ts) => {
-    const d = new Date(ts)
-    return d.toLocaleString('ru-RU', {
-      day: '2-digit', month: '2-digit',
-      hour: '2-digit', minute: '2-digit'
-    })
+  async function handleGenerateToken() {
+    const result = await generateDeviceToken(selected.id)
+    setDevice(d => ({ ...d, pending_code: result.code, code_expires_at: result.expires_at }))
   }
 
-  if (loading) return (
-    <div style={styles.container}>
-      <div style={styles.center}><p>Загрузка...</p></div>
-    </div>
-  )
+  async function handleLogout() {
+    await logout()
+    onLogout()
+  }
+
+  if (loading) return <div className="app-loading"><div className="spinner" /></div>
 
   return (
-    <div style={styles.container}>
-
+    <div className="admin-screen">
       {/* Шапка */}
-      <div style={styles.header}>
-        <button style={styles.backBtn} onClick={onBack}>← Назад</button>
-        <span style={styles.headerTitle}>⚙️ Администрирование</span>
-      </div>
+      <header className="admin-header">
+        <h1 className="admin-title">Управление</h1>
+        <div className="admin-header-right">
+          <span className="admin-login">{user.login}</span>
+          <button className="btn btn-outline btn-sm" onClick={handleLogout}>Выйти</button>
+        </div>
+      </header>
 
-      {/* Выбор группы */}
-      {groups.length > 1 && (
-        <div style={styles.groupSelector}>
+      <div className="admin-layout">
+        {/* Список групп */}
+        <aside className="groups-sidebar">
+          <div className="sidebar-title">Группы</div>
           {groups.map(g => (
             <button
               key={g.id}
-              style={{ ...styles.groupBtn, background: selectedGroup?.id === g.id ? '#e94560' : '#1a4a7a' }}
-              onClick={() => setSelectedGroup(g)}
+              className={`sidebar-item ${selected?.id === g.id ? 'active' : ''}`}
+              onClick={() => { setSelected(g); setTab('users') }}
             >
-              {g.name}
+              <span className="sidebar-item-name">{g.name}</span>
+              <span className="sidebar-item-count">{g.user_count}</span>
             </button>
           ))}
-        </div>
-      )}
+        </aside>
 
-      {/* Вкладки */}
-      <div style={styles.tabs}>
-        <button
-          style={{ ...styles.tab, borderBottom: tab === 'users' ? '2px solid #e94560' : 'none' }}
-          onClick={() => setTab('users')}
-        >
-          👥 Пользователи
-        </button>
-        <button
-          style={{ ...styles.tab, borderBottom: tab === 'logs' ? '2px solid #e94560' : 'none' }}
-          onClick={() => setTab('logs')}
-        >
-          📋 Журнал
-        </button>
-      </div>
-
-      {error   && <p style={styles.error}>{error}</p>}
-      {success && <p style={styles.success}>{success}</p>}
-
-      <div style={styles.content}>
-
-        {/* Вкладка пользователей */}
-        {tab === 'users' && (
-          <div style={styles.section}>
-            <button
-              style={styles.addBtn}
-              onClick={() => setShowAddUser(!showAddUser)}
-            >
-              {showAddUser ? '✕ Отмена' : '+ Добавить пользователя'}
-            </button>
-
-            {showAddUser && (
-              <div style={styles.addForm}>
-                <input
-                  style={styles.input}
-                  placeholder="Логин"
-                  value={newUser.login}
-                  onChange={e => setNewUser({ ...newUser, login: e.target.value })}
-                  autoCapitalize="none"
-                />
-                <input
-                  style={styles.input}
-                  type="password"
-                  placeholder="Пароль"
-                  value={newUser.password}
-                  onChange={e => setNewUser({ ...newUser, password: e.target.value })}
-                />
-                <select
-                  style={styles.input}
-                  value={newUser.role}
-                  onChange={e => setNewUser({ ...newUser, role: e.target.value })}
-                >
-                  <option value="user">Пользователь</option>
-                  <option value="admin">Администратор</option>
-                </select>
-
-                {/* Чекбокс single_session только для роли admin */}
-                {newUser.role === 'admin' && (
-                  <label style={styles.checkRow}>
-                    <input
-                      type="checkbox"
-                      checked={newUser.single_session}
-                      onChange={e => setNewUser({ ...newUser, single_session: e.target.checked })}
-                    />
-                    <span style={styles.checkLabel}>Одна сессия (один вход)</span>
-                  </label>
-                )}
-
-                <button style={styles.saveBtn} onClick={handleAddUser}>
-                  Сохранить
-                </button>
+        {/* Контент */}
+        <main className="admin-content">
+          {!selected ? (
+            <div className="empty-state">Выберите группу</div>
+          ) : (
+            <>
+              <div className="content-header">
+                <h2 className="content-title">{selected.name}</h2>
               </div>
-            )}
 
-            {/* Список пользователей */}
-            <div style={styles.list}>
-              {users.map(u => (
-                <div key={u.id} style={styles.userCard}>
-                  <div style={styles.userMain}>
-                    <div style={styles.userInfo}>
-                      <span style={styles.userName}>{u.login}</span>
-                      <span style={{
-                        ...styles.roleTag,
-                        background: u.role === 'admin' ? '#e94560' : '#1a4a7a'
-                      }}>
-                        {u.role === 'admin' ? 'Админ' : 'Польз.'}
-                      </span>
-                      {u.has_session && (
-                        <span style={styles.sessionTag}>●</span>
-                      )}
+              {/* Табы */}
+              <div className="tabs">
+                {['users', 'device', 'logs'].map(t => (
+                  <button
+                    key={t}
+                    className={`tab ${tab === t ? 'active' : ''}`}
+                    onClick={() => setTab(t)}
+                  >
+                    {{ users: 'Пользователи', device: 'Устройство', logs: 'Журнал' }[t]}
+                  </button>
+                ))}
+              </div>
+
+              {/* ── Пользователи ── */}
+              {tab === 'users' && (
+                <div className="tab-content">
+                  <div className="tab-toolbar">
+                    <button className="btn btn-primary btn-sm" onClick={() => setShowAddUser(v => !v)}>
+                      {showAddUser ? 'Отмена' : '+ Добавить'}
+                    </button>
+                  </div>
+
+                  {/* Форма добавления */}
+                  {showAddUser && (
+                    <div className="add-user-panel">
+                      <div className="mode-toggle">
+                        <button className={`mode-btn ${addMode === 'new' ? 'active' : ''}`}
+                                onClick={() => setAddMode('new')}>Новый</button>
+                        <button className={`mode-btn ${addMode === 'existing' ? 'active' : ''}`}
+                                onClick={() => setAddMode('existing')}>По ID</button>
+                      </div>
+
+                      <form onSubmit={handleAddUser} className="add-user-form">
+                        {addMode === 'new' ? (
+                          <>
+                            <div className="field-row">
+                              <div className="field">
+                                <label>Логин</label>
+                                <input value={newUser.login}
+                                       onChange={e => setNewUser(u => ({ ...u, login: e.target.value }))}
+                                       required />
+                              </div>
+                              <div className="field">
+                                <label>Пароль</label>
+                                <input type="password" value={newUser.password}
+                                       onChange={e => setNewUser(u => ({ ...u, password: e.target.value }))}
+                                       required minLength={6} />
+                              </div>
+                            </div>
+                            <div className="field-row">
+                              <div className="field">
+                                <label>Роль</label>
+                                <select value={newUser.role}
+                                        onChange={e => setNewUser(u => ({ ...u, role: e.target.value }))}>
+                                  <option value="user">Пользователь</option>
+                                  <option value="admin">Администратор</option>
+                                </select>
+                              </div>
+                              {newUser.role === 'admin' && (
+                                <div className="field field-checkbox">
+                                  <label>
+                                    <input type="checkbox" checked={newUser.single_session}
+                                           onChange={e => setNewUser(u => ({ ...u, single_session: e.target.checked }))} />
+                                    Одна сессия
+                                  </label>
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="field">
+                            <label>ID пользователя</label>
+                            <input
+                              value={existingUser.user_id}
+                              onChange={e => setExistingUser(u => ({ ...u, user_id: e.target.value }))}
+                              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                              required
+                            />
+                          </div>
+                        )}
+
+                        <div className="field">
+                          <label>Описание в группе</label>
+                          <input
+                            value={addMode === 'new' ? newUser.description : existingUser.description}
+                            onChange={e => addMode === 'new'
+                              ? setNewUser(u => ({ ...u, description: e.target.value }))
+                              : setExistingUser(u => ({ ...u, description: e.target.value }))
+                            }
+                            placeholder="Необязательно"
+                          />
+                        </div>
+
+                        {addError && <div className="form-error">{addError}</div>}
+
+                        <button type="submit" className="btn btn-primary" disabled={saving}>
+                          {saving ? 'Сохранение...' : 'Добавить'}
+                        </button>
+                      </form>
                     </div>
-                    {u.id !== user.id && (
-                      <button
-                        style={styles.removeBtn}
-                        onClick={() => handleRemoveUser(u.id, u.login)}
-                      >
-                        🗑️
+                  )}
+
+                  {/* Список пользователей */}
+                  <div className="users-list">
+                    {users.length === 0 && <div className="empty-state">Нет пользователей</div>}
+                    {users.map(u => (
+                      <div key={u.id} className="user-card">
+                        <div className="user-card-main">
+                          <div className="user-info">
+                            <span className="user-login">{u.login}</span>
+                            <span className={`user-role role-${u.role}`}>{u.role}</span>
+                            {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
+                            {!u.is_active && <span className="badge-inactive">неактивен</span>}
+                          </div>
+                          {u.description && <div className="user-description">{u.description}</div>}
+                          {u.display_name && <div className="user-display-name">{u.display_name}</div>}
+                        </div>
+
+                        <div className="user-card-actions">
+                          {u.has_session && (
+                            <button className="btn btn-outline btn-xs"
+                                    onClick={() => handleResetSession(u.id)}
+                                    title="Сбросить сессию">
+                              ⏏ Сессия
+                            </button>
+                          )}
+                          {u.role !== 'superadmin' && (
+                            <button
+                              className={`btn btn-xs ${u.single_session ? 'btn-warning' : 'btn-outline'}`}
+                              onClick={() => handleToggleSingleSession(u.id, u.single_session)}
+                              title={u.single_session ? 'Одна сессия (нажать чтобы снять)' : 'Несколько сессий'}
+                            >
+                              {u.single_session ? '🔒 1 сессия' : '🔓 мульти'}
+                            </button>
+                          )}
+                          <button className="btn btn-danger btn-xs"
+                                  onClick={() => handleRemoveUser(u.id)}>
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Устройство ── */}
+              {tab === 'device' && (
+                <div className="tab-content">
+                  {device?.device_id ? (
+                    <div className="device-info">
+                      <div className="device-status">
+                        <span className={`device-dot-lg ${device.is_online ? 'online' : 'offline'}`} />
+                        <span>{device.is_online ? 'Онлайн' : 'Оффлайн'}</span>
+                      </div>
+                      <div className="device-details">
+                        <div><b>ID:</b> <code>{device.device_id}</code></div>
+                        <div><b>Прошивка:</b> {device.fw_version || '—'}</div>
+                        <div><b>Последний раз:</b> {device.last_seen
+                          ? new Date(device.last_seen).toLocaleString('ru')
+                          : '—'}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="empty-state">Устройство не привязано</div>
+                  )}
+
+                  <div className="device-token-section">
+                    <div className="section-title">Привязка ESP устройства</div>
+                    {device?.pending_code ? (
+                      <div className="token-display">
+                        <div className="token-code">{device.pending_code}</div>
+                        <div className="token-hint">
+                          Введите этот код в CaptivePortal устройства.<br/>
+                          Действует до {new Date(device.code_expires_at).toLocaleString('ru')}
+                        </div>
+                      </div>
+                    ) : (
+                      <button className="btn btn-primary" onClick={handleGenerateToken}>
+                        Сгенерировать код привязки
                       </button>
                     )}
                   </div>
-
-                  {/* Действия для admin пользователей */}
-                  {u.role === 'admin' && u.id !== user.id && (
-                    <div style={styles.userFooter}>
-                      <label style={styles.toggleRow}>
-                        <input
-                          type="checkbox"
-                          checked={!!u.single_session}
-                          onChange={() => handleToggleSingleSession(u.id, !!u.single_session)}
-                        />
-                        <span style={styles.toggleLabel}>1 сессия</span>
-                      </label>
-                      {u.has_session && (
-                        <button
-                          style={styles.resetBtn}
-                          onClick={() => handleResetSession(u.id, u.login)}
-                        >
-                          Сбросить сессию
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Сброс сессии для обычных пользователей */}
-                  {u.role === 'user' && u.has_session && u.id !== user.id && (
-                    <div style={styles.userFooter}>
-                      <button
-                        style={styles.resetBtn}
-                        onClick={() => handleResetSession(u.id, u.login)}
-                      >
-                        Сбросить сессию
-                      </button>
-                    </div>
-                  )}
                 </div>
-              ))}
-            </div>
-
-            {selectedGroup && (
-              <DeviceToken groupId={selectedGroup.id} />
-            )}
-          </div>
-        )}
-
-        {/* Вкладка журнала */}
-        {tab === 'logs' && (
-          <div style={styles.section}>
-            <div style={styles.list}>
-              {logs.length === 0 && (
-                <p style={{ color: '#aaa', textAlign: 'center', padding: '20px' }}>
-                  Журнал пуст
-                </p>
               )}
-              {logs.map(log => (
-                <div key={log.id} style={styles.logRow}>
-                  <span style={styles.logTime}>{formatDate(log.ts)}</span>
-                  <span style={styles.logUser}>{log.user_login}</span>
-                  <span style={styles.logAction}>{log.action}</span>
+
+              {/* ── Журнал ── */}
+              {tab === 'logs' && (
+                <div className="tab-content">
+                  <div className="logs-list">
+                    {logs.length === 0 && <div className="empty-state">Нет событий</div>}
+                    {logs.map(l => (
+                      <div key={l.id} className="log-entry">
+                        <span className="log-ts">{new Date(l.ts).toLocaleString('ru')}</span>
+                        <span className="log-actor">{l.actor_login || '—'}</span>
+                        <span className={`log-action action-${l.action}`}>{l.action}</span>
+                        {l.payload && (
+                          <span className="log-payload">
+                            {JSON.stringify(l.payload).substring(0, 60)}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
+              )}
+            </>
+          )}
+        </main>
       </div>
     </div>
   )
-}
-
-const styles = {
-  container: { display: 'flex', flexDirection: 'column', height: '100vh', background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)' },
-  header: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: '#0f3460', boxShadow: '0 2px 8px rgba(0,0,0,0.3)', minHeight: '56px' },
-  headerTitle: { fontSize: '16px', fontWeight: 'bold', color: '#eee' },
-  backBtn: { background: 'transparent', color: '#e94560', fontSize: '16px', padding: '4px 8px', borderRadius: '8px' },
-  groupSelector: { display: 'flex', gap: '8px', padding: '12px 16px', overflowX: 'auto', background: '#16213e' },
-  groupBtn: { padding: '8px 16px', borderRadius: '20px', color: 'white', fontSize: '14px', whiteSpace: 'nowrap' },
-  tabs: { display: 'flex', background: '#16213e', borderBottom: '1px solid #1a4a7a' },
-  tab: { flex: 1, padding: '12px', background: 'transparent', color: '#eee', fontSize: '14px', borderRadius: 0 },
-  content: { flex: 1, overflowY: 'auto' },
-  section: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
-  addBtn: { background: '#1a4a7a', color: 'white', padding: '12px', borderRadius: '8px', fontSize: '15px', width: '100%' },
-  addForm: { background: '#0f3460', borderRadius: '12px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' },
-  input: { padding: '12px', borderRadius: '8px', border: '1px solid #1a4a7a', background: '#16213e', color: '#eee', fontSize: '15px' },
-  saveBtn: { background: '#e94560', color: 'white', padding: '12px', borderRadius: '8px', fontSize: '15px', fontWeight: 'bold' },
-  checkRow: { display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', padding: '4px 0' },
-  checkLabel: { color: '#eee', fontSize: '14px' },
-  list: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  userCard: { background: '#0f3460', borderRadius: '10px', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' },
-  userMain: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  userInfo: { display: 'flex', alignItems: 'center', gap: '8px' },
-  userName: { fontSize: '15px' },
-  roleTag: { fontSize: '11px', padding: '2px 8px', borderRadius: '10px', color: 'white' },
-  sessionTag: { fontSize: '10px', color: '#27ae60' },
-  removeBtn: { background: 'transparent', fontSize: '18px', padding: '4px' },
-  userFooter: { display: 'flex', alignItems: 'center', gap: '12px', paddingTop: '4px', borderTop: '1px solid #1a4a7a' },
-  toggleRow: { display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' },
-  toggleLabel: { fontSize: '12px', color: '#aaa' },
-  resetBtn: { background: 'transparent', color: '#e94560', fontSize: '12px', border: '1px solid #e9456066', padding: '4px 10px', borderRadius: '6px' },
-  logRow: { display: 'flex', gap: '8px', alignItems: 'center', background: '#0f3460', borderRadius: '10px', padding: '10px 12px', flexWrap: 'wrap' },
-  logTime: { fontSize: '12px', color: '#aaa', whiteSpace: 'nowrap' },
-  logUser: { fontSize: '13px', color: '#e94560', fontWeight: 'bold' },
-  logAction: { fontSize: '13px', color: '#eee' },
-  error: { color: '#e94560', padding: '8px 16px', fontSize: '14px' },
-  success: { color: '#27ae60', padding: '8px 16px', fontSize: '14px' },
-  center: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' },
 }

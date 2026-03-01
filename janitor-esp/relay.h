@@ -7,16 +7,21 @@ class RelayManager {
 public:
   void begin(DeviceConfig& cfg) {
     //_count = cfg.relayCount(); //relay_count;
+    uint8_t j = 0;
     for (uint8_t i = 0; i < MAX_RELAYS; i++) {
-      _pins[i]      = cfg.relays[i].pin;
-      bool validPin = cfg.relays[i].pin != (uint8_t)NOT_A_PIN;
-      if( validPin ){      
-        _activeLow[i] = cfg.relays[i].active_low;
-        _state[i]     = false;
-        pinMode(_pins[i], OUTPUT);
-        setRelay(i, false);  // выключить при старте
-      } 
+      if ( ! cfg.relays[i].isValid()  ) continue;
+
+      _pins[j]      = cfg.relays[i].pin;
+      //bool validPin = cfg.relays[i].pin != (uint8_t)NOT_A_PIN;
+
+      Serial.printf("[RELAY] Init pin %u", cfg.relays[i].pin );      
+      _activeLow[j] = cfg.relays[i].active_low;
+      _state[j]     = false;
+      pinMode(_pins[j], OUTPUT);
+      setRelay(j, false);  // выключить при старте
+      j++;
     }
+    _count = j;
   }
 
   // Импульс (duration мс), затем выключить
@@ -70,6 +75,7 @@ private:
   unsigned long _pulseEnd[MAX_RELAYS] = {0};
 
   void setRelay(uint8_t i, bool on) {
+    Serial.printf("[Relay(%u)] ==> %s\n", _pins[i], on ? "ON" : "OFF");
     digitalWrite(_pins[i], _activeLow[i] ? !on : on);
   }
 };

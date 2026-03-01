@@ -33,7 +33,7 @@ public:
       if (_tryConnect(cfg.wifi2_ssid, cfg.wifi2_psk)) return true;
     }
 
-    Serial.println("[WiFi] Connection failed");
+    Serial.println(F("[WiFi] Connection failed"));
     //Led.setError();
      Led.setMode( LedManager::ERROR);
     return false;
@@ -54,17 +54,17 @@ public:
       // Без сертификата — просто запускаем NTP и не ждём
       //configTime(NTP_TIMEZONE * 3600, 0, NTP_SERVER1, NTP_SERVER2);
 
-      Serial.println("[NTP] Started (not waiting, insecure mode)");
+      Serial.println(F("[NTP] Started (not waiting, insecure mode)"));
       return true;
     }
 
-    Serial.println("[NTP] Syncing time (required for TLS)...");
+    Serial.println(F("[NTP] Syncing time (required for TLS)..."));
     //configTime(0, 0, NTP_SERVER1, NTP_SERVER2);
 
     unsigned long start = millis();
     while (time(nullptr) < 1000000000UL) {  
       if (millis() - start > NTP_TIMEOUT_MS) {
-        Serial.println("[NTP] Timeout!");
+        Serial.println(F("[NTP] Timeout!"));
         return false;
       }
       Led.update();
@@ -81,7 +81,7 @@ public:
   // Переподключение если потеряли сеть
   bool reconnectIfNeeded(DeviceConfig& cfg) {
     if (isConnected()) return true;
-    Serial.println("[WiFi] Lost connection, reconnecting...");
+    Serial.println(F("[WiFi] Lost connection, reconnecting..."));
     Led.setMode( LedManager::CONNECTING);
     return connect(cfg);
   }

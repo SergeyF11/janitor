@@ -53,7 +53,7 @@ public:
         HTTPUpload& upload = _ptr->_portal.server.upload();
         static File _certFile;
         if (upload.status == UPLOAD_FILE_START) {
-          Serial.println("[Portal] Cert upload start");
+          Serial.println(F("[Portal] Cert upload start"));
           _certFile = LittleFS.open(CERT_FILE, "w");
         } else if (upload.status == UPLOAD_FILE_WRITE) {
           if (_certFile) _certFile.write(upload.buf, upload.currentSize);
@@ -69,7 +69,7 @@ public:
     );
 
     _portal.start();
-    Serial.println("[Portal] Started");
+    Serial.println(F("[Portal] Started"));
     return true;
   }
 
@@ -79,7 +79,7 @@ public:
 
     if (PORTAL_TIMEOUT > 0 && _cfg->registered) {
       if (millis() - _startTime > PORTAL_TIMEOUT * 1000UL) {
-        Serial.println("[Portal] Timeout, closing");
+        Serial.println(F("[Portal] Timeout, closing"));
         return true;
       }
     }
@@ -89,7 +89,7 @@ public:
   void stop() {
     _portal.stop();
     WiFi.softAPdisconnect(true);
-    Serial.println("[Portal] Stopped");
+    Serial.println(F("[Portal] Stopped"));
   }
 
 private:
@@ -112,10 +112,10 @@ private:
     GP.PAGE_TITLE("Привратник");
 
     // AutoTime — синхронизация времени и зоны из браузера
-    #ifndef ESP32
+    //#ifndef ESP32
       GP.SEND(FPSTR(AutoTime::SCRIPT));
       GP.HIDDEN("tz", "");
-    #endif
+    //#endif
 
     // Навигация
     GP.NAV_TABS_LINKS("/",         "⚙️ WiFi");
@@ -148,14 +148,7 @@ private:
       GP.PASS_EYE("w2p", "Пароль", _cfg->wifi2_psk );
 
       GP.HR();
-      GP.LABEL("MQTT сервер");
-      GP.TEXT("mh", "Хост", _cfg->mqtt_host);
-      GP.NUMBER("mp", "Порт", _cfg->mqtt_port);
-
-      GP.HR();
-      GP.LABEL("TLS режим");
-      GP.CHECK("tls", _cfg->tls_secure, GP_GREEN);
-
+      
       GP.SUBMIT("💾 Сохранить WiFi");
       GP.BLOCK_END();
       GP.FORM_END();
@@ -172,19 +165,14 @@ private:
       for (uint8_t i = 0; i < MAX_RELAYS; i++) {
         GP.HR();
         GP.TITLE("Реле " + String(i+1));
-        // GP.NUMBER("p" + String(i), "GPIO пин",
-        //           i < _cfg->relay_count ? _cfg->relays[i].pin : -1);
-        // GP.CHECK("al" + String(i), "Активный LOW", GP_GRAY,
-        //           i < _cfg->relay_count ? _cfg->relays[i].active_low : true);
-        // // Показываем только имя (без топика после |)
-        // String name = i < _cfg->relay_count ? _cfg->relays[i].name : "";
         bool validRelay = _cfg->relays[i].pin != (uint8_t)NOT_A_PIN;
-        GP.NUMBER("p" + String(i), "GPIO пин", 
-                  validRelay ? _cfg->relays[i].pin : NOT_A_PIN );
-        GP.CHECK("al" + String(i), "Активный LOW", GP_GRAY, 
-                  validRelay ? _cfg->relays[i].active_low : true);
-        String name = validRelay ? _cfg->relays[i].name : "";
 
+        GP.NUMBER("p" + String(i), "GPIO пин", _cfg->relays[i].pin);
+                
+        GP.LABEL("Активный LOW" );
+        GP.CHECK("al" + String(i), _cfg->relays[i].active_low, GP_GRAY );
+
+        String name = validRelay ? _cfg->relays[i].name : "";
         int sep = name.indexOf('|');
         if (sep >= 0) name = name.substring(0, sep);
         GP.TEXT("rn" + String(i), "Название", name);
@@ -200,12 +188,20 @@ private:
       GP.BLOCK_BEGIN();
       GP.TITLE("🔗 Привязка к серверу");
 
+      GP.LABEL("MQTT сервер");
+      GP.TEXT("mh", "Хост", _cfg->mqtt_host);
+      GP.NUMBER("mp", "Порт", _cfg->mqtt_port);
+      GP.HR();
+
+
       if (_cfg->registered) {
         GP.ALERT("success", "✅ Привязано. MQTT: " + String(_cfg->mqtt_user));
         GP.HR();
       }
 
-      for (uint8_t i = 0; i < _cfg->relay_count; i++) {
+      for (uint8_t i = 0; i < MAX_RELAYS/* _cfg->relay_count */; i++) {
+        if ( ! _cfg->relays[i].isValid() ) continue;
+
         String name = _cfg->relays[i].name;
         int sep = name.indexOf('|');
         String dispName = sep >= 0 ? name.substring(0, sep) : name;
@@ -229,8 +225,14 @@ private:
 
     // ── Сертификат ────────────────────────────────────────
     else if (uri == "/cert") {
+      
       GP.BLOCK_BEGIN();
+      
       GP.TITLE("🔒 CA Сертификат");
+
+      GP.LABEL("TLS режим");
+      GP.CHECK("tls", _cfg->tls_secure, GP_GREEN);
+      GP.HR();
 
       Storage.hasCert()
         ? GP.ALERT("success", "✅ Сертификат загружен")
@@ -275,9 +277,10 @@ private:
       }
 
       // Часы из EspTime
-      #ifndef ESP32
-        GP.SEND(FPSTR(EspTime::SCRIPT));
-      #endif
+      //#ifndef ESP32
+      GP.LABEL("TZ: " + String( EspTime::getTz()));
+      GP.SEND(FPSTR(EspTime::SCRIPT));
+      //#endif
 
       GP.HR();
       GP.FORM_BEGIN("/reset");
@@ -314,23 +317,22 @@ private:
       strncpy( _cfg->tz, EspTime::getTz(), sizeof(_cfg->tz));
       Storage.saveConfig(*_cfg);
       _statusMsg = "✅ WiFi сохранён";  _statusOk = true;
-      Serial.println("[Portal] WiFi saved");
+      Serial.println(F("[Portal] WiFi saved"));
     }
 
     if (_portal.form("/save_relay")) {
       //_cfg->relay_count = constrain(_portal.getInt("rc"), 1, MAX_RELAYS);
       //_cfg->relayCount();
       for (uint8_t i = 0; i < MAX_RELAYS; i++) {
-        if (_cfg->relays[i].pin != (uint8_t)NOT_A_PIN ){
-          _cfg->relays[i].pin        = _portal.getInt("p"  + String(i));
-          _cfg->relays[i].active_low = _portal.getBool("al" + String(i));
-          // Имя — сохраняем часть до | и добавляем топик после |
-          String newName = _portal.getString("rn" + String(i));
-          String cur = _cfg->relays[i].name;
-          int sep = cur.indexOf('|');
-          String full = newName + (sep >= 0 ? cur.substring(sep) : "");
-          strlcpy(_cfg->relays[i].name, full.c_str(), sizeof(_cfg->relays[i].name));
-        }
+        _cfg->relays[i].pin        = _portal.getInt("p"  + String(i));
+        _cfg->relays[i].active_low = _portal.getBool("al" + String(i));
+        // Имя — сохраняем часть до | и добавляем топик после |
+        String newName = _portal.getString("rn" + String(i));
+        String cur = _cfg->relays[i].name;
+        int sep = cur.indexOf('|');
+        String full = newName + (sep >= 0 ? cur.substring(sep) : "");
+        strlcpy(_cfg->relays[i].name, full.c_str(), sizeof(_cfg->relays[i].name));
+        
       }
       strncpy( _cfg->tz, EspTime::getTz(), sizeof(_cfg->tz));
       // _cfg->relayCount();
