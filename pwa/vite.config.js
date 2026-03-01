@@ -12,8 +12,8 @@ export default defineConfig({
       manifest: false, // используем наш manifest.json
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        navigateFallback: '/janitor/',
-        navigateFallbackDenylist: [/^\/janitor\/api/],
+        navigateFallback: '/janitor/index.html',
+        navigateFallbackDenylist: [/^\/janitor\/api/, /^\/janitor\/ws/],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/smilart\.ru\/janitor\/api\/.*/i,

@@ -1,24 +1,18 @@
 import axios from 'axios'
 
-// Базовый URL — в dev режиме proxy перенаправит на smilart.ru
 const BASE = '/janitor/api'
 
-// Создаём экземпляр axios с настройками
 const api = axios.create({
   baseURL: BASE,
   headers: { 'Content-Type': 'application/json' }
 })
 
-// Автоматически добавляем токен к каждому запросу
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
+  if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
-// Если токен истёк — перенаправить на логин
 api.interceptors.response.use(
   response => response,
   error => {
@@ -55,8 +49,8 @@ export const getAdminGroups = () =>
 export const getGroupUsers = (groupId) =>
   api.get(`/admin/groups/${groupId}/users`)
 
-export const addUserToGroup = (groupId, login, password, role) =>
-  api.post(`/admin/groups/${groupId}/users`, { login, password, role })
+export const addUserToGroup = (groupId, login, password, role, single_session = true) =>
+  api.post(`/admin/groups/${groupId}/users`, { login, password, role, single_session })
 
 export const removeUserFromGroup = (groupId, userId) =>
   api.delete(`/admin/groups/${groupId}/users/${userId}`)
@@ -64,12 +58,21 @@ export const removeUserFromGroup = (groupId, userId) =>
 export const getGroupLogs = (groupId) =>
   api.get(`/admin/groups/${groupId}/logs`)
 
+export const resetUserSession = (userId) =>
+  api.post(`/admin/users/${userId}/reset-session`)
+
+export const updateSingleSession = (userId, single_session) =>
+  api.patch(`/admin/users/${userId}/single-session`, { single_session })
+
+export const updateGroup = (groupId, data) =>
+  api.patch(`/admin/groups/${groupId}`, data)
+
 // ── SuperAdmin ────────────────────────────────────────────────
 export const getAdmins = () =>
   api.get('/sa/admins')
 
-export const createAdmin = (login, password) =>
-  api.post('/sa/admins', { login, password })
+export const createAdmin = (login, password, single_session = true) =>
+  api.post('/sa/admins', { login, password, single_session })
 
 export const getSaGroups = () =>
   api.get('/sa/groups')
@@ -82,5 +85,12 @@ export const assignGroupAdmin = (groupId, adminId) =>
 
 export const getSaLogs = () =>
   api.get('/sa/logs')
+
+// ── Device tokens ─────────────────────────────────────────────
+export const generateDeviceToken = (groupId) =>
+  api.post(`/admin/groups/${groupId}/device-token`)
+
+export const getDeviceStatus = (groupId) =>
+  api.get(`/admin/groups/${groupId}/device`)
 
 export default api

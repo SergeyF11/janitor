@@ -18,7 +18,11 @@ export default function Login({ onLogin }) {
       localStorage.setItem('user', JSON.stringify(res.data.user))
       onLogin(res.data.user)
     } catch (err) {
-      setError('Неверный логин или пароль')
+      if (err.response?.data?.error === 'session_exists') {
+        setError('Аккаунт используется на другом устройстве. Обратитесь к администратору.')
+      } else {
+        setError('Неверный логин или пароль')
+      }
     } finally {
       setLoading(false)
     }
