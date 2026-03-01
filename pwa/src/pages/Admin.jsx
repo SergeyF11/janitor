@@ -1,10 +1,10 @@
+import DeviceToken from '../components/DeviceToken'
 import { useState, useEffect } from 'react'
 import {
-  getAdminGroups,
-  getGroupUsers,
-  addUserToGroup,
-  removeUserFromGroup,
-  getGroupLogs
+  getAdminGroups, getGroupUsers,
+  addUserToGroup, removeUserFromGroup,
+  getGroupLogs, resetUserSession,
+  updateGroup, updateSingleSession
 } from '../api'
 
 export default function Admin({ user, onBack }) {
@@ -12,16 +12,14 @@ export default function Admin({ user, onBack }) {
   const [selectedGroup, setSelectedGroup] = useState(null)
   const [users, setUsers] = useState([])
   const [logs, setLogs] = useState([])
-  const [tab, setTab] = useState('users') // 'users' | 'logs'
+  const [tab, setTab] = useState('users')
   const [loading, setLoading] = useState(true)
   const [showAddUser, setShowAddUser] = useState(false)
-  const [newUser, setNewUser] = useState({ login: '', password: '', role: 'user' })
+  const [newUser, setNewUser] = useState({ login: '', password: '', role: 'user', single_session: true })
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  useEffect(() => {
-    loadGroups()
-  }, [])
+  useEffect(() => { loadGroups() }, [])
 
   useEffect(() => {
     if (selectedGroup) {
@@ -67,14 +65,20 @@ export default function Admin({ user, onBack }) {
     }
     setError('')
     try {
-      await addUserToGroup(selectedGroup.id, newUser.login, newUser.password, newUser.role)
+      await addUserToGroup(
+        selectedGroup.id,
+        newUser.login,
+        newUser.password,
+        newUser.role,
+        newUser.role === 'user' ? true : newUser.single_session
+      )
       setSuccess(`Пользователь ${newUser.login} добавлен`)
-      setNewUser({ login: '', password: '', role: 'user' })
+      setNewUser({ login: '', password: '', role: 'user', single_session: true })
       setShowAddUser(false)
       loadUsers(selectedGroup.id)
       setTimeout(() => setSuccess(''), 3000)
     } catch (err) {
-      setError('Ошибка при добавлении пользователя')
+      setError(err.response?.data?.message || 'Ошибка при добавлении пользователя')
     }
   }
 
@@ -85,6 +89,30 @@ export default function Admin({ user, onBack }) {
       loadUsers(selectedGroup.id)
     } catch (err) {
       setError('Ошибка при удалении')
+    }
+  }
+
+  const handleResetSession = async (userId, login) => {
+    if (!confirm(`Сбросить сессию ${login}?`)) return
+    try {
+      await resetUserSession(userId)
+      setSuccess(`Сессия ${login} сброшена`)
+      loadUsers(selectedGroup.id)
+      setTimeout(() => setSuccess(''), 3000)
+    } catch (err) {
+      setError('Ошибка сброса сессии')
+    }
+  }
+
+  const handleToggleSingleSession = async (userId, current) => {
+    try {
+      await updateSingleSession(userId, !current)
+      setUsers(prev => prev.map(u =>
+        u.id === userId ? { ...u, single_session: !current } : u
+      ))
+    } catch (err) {
+      setError(err.response?.data?.error || 'Ошибка изменения флага')
+      setTimeout(() => setError(''), 3000)
     }
   }
 
@@ -117,10 +145,7 @@ export default function Admin({ user, onBack }) {
           {groups.map(g => (
             <button
               key={g.id}
-              style={{
-                ...styles.groupBtn,
-                background: selectedGroup?.id === g.id ? '#e94560' : '#1a4a7a'
-              }}
+              style={{ ...styles.groupBtn, background: selectedGroup?.id === g.id ? '#e94560' : '#1a4a7a' }}
               onClick={() => setSelectedGroup(g)}
             >
               {g.name}
@@ -145,11 +170,9 @@ export default function Admin({ user, onBack }) {
         </button>
       </div>
 
-      {/* Сообщения */}
-      {error && <p style={styles.error}>{error}</p>}
+      {error   && <p style={styles.error}>{error}</p>}
       {success && <p style={styles.success}>{success}</p>}
 
-      {/* Содержимое */}
       <div style={styles.content}>
 
         {/* Вкладка пользователей */}
@@ -162,7 +185,6 @@ export default function Admin({ user, onBack }) {
               {showAddUser ? '✕ Отмена' : '+ Добавить пользователя'}
             </button>
 
-            {/* Форма добавления */}
             {showAddUser && (
               <div style={styles.addForm}>
                 <input
@@ -187,6 +209,19 @@ export default function Admin({ user, onBack }) {
                   <option value="user">Пользователь</option>
                   <option value="admin">Администратор</option>
                 </select>
+
+                {/* Чекбокс single_session только для роли admin */}
+                {newUser.role === 'admin' && (
+                  <label style={styles.checkRow}>
+                    <input
+                      type="checkbox"
+                      checked={newUser.single_session}
+                      onChange={e => setNewUser({ ...newUser, single_session: e.target.checked })}
+                    />
+                    <span style={styles.checkLabel}>Одна сессия (один вход)</span>
+                  </label>
+                )}
+
                 <button style={styles.saveBtn} onClick={handleAddUser}>
                   Сохранить
                 </button>
@@ -196,27 +231,70 @@ export default function Admin({ user, onBack }) {
             {/* Список пользователей */}
             <div style={styles.list}>
               {users.map(u => (
-                <div key={u.id} style={styles.userRow}>
-                  <div>
-                    <span style={styles.userName}>{u.login}</span>
-                    <span style={{
-                      ...styles.roleTag,
-                      background: u.role === 'admin' ? '#e94560' : '#1a4a7a'
-                    }}>
-                      {u.role === 'admin' ? 'Админ' : 'Польз.'}
-                    </span>
+                <div key={u.id} style={styles.userCard}>
+                  <div style={styles.userMain}>
+                    <div style={styles.userInfo}>
+                      <span style={styles.userName}>{u.login}</span>
+                      <span style={{
+                        ...styles.roleTag,
+                        background: u.role === 'admin' ? '#e94560' : '#1a4a7a'
+                      }}>
+                        {u.role === 'admin' ? 'Админ' : 'Польз.'}
+                      </span>
+                      {u.has_session && (
+                        <span style={styles.sessionTag}>●</span>
+                      )}
+                    </div>
+                    {u.id !== user.id && (
+                      <button
+                        style={styles.removeBtn}
+                        onClick={() => handleRemoveUser(u.id, u.login)}
+                      >
+                        🗑️
+                      </button>
+                    )}
                   </div>
-                  {u.id !== user.id && (
-                    <button
-                      style={styles.removeBtn}
-                      onClick={() => handleRemoveUser(u.id, u.login)}
-                    >
-                      🗑️
-                    </button>
+
+                  {/* Действия для admin пользователей */}
+                  {u.role === 'admin' && u.id !== user.id && (
+                    <div style={styles.userFooter}>
+                      <label style={styles.toggleRow}>
+                        <input
+                          type="checkbox"
+                          checked={!!u.single_session}
+                          onChange={() => handleToggleSingleSession(u.id, !!u.single_session)}
+                        />
+                        <span style={styles.toggleLabel}>1 сессия</span>
+                      </label>
+                      {u.has_session && (
+                        <button
+                          style={styles.resetBtn}
+                          onClick={() => handleResetSession(u.id, u.login)}
+                        >
+                          Сбросить сессию
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Сброс сессии для обычных пользователей */}
+                  {u.role === 'user' && u.has_session && u.id !== user.id && (
+                    <div style={styles.userFooter}>
+                      <button
+                        style={styles.resetBtn}
+                        onClick={() => handleResetSession(u.id, u.login)}
+                      >
+                        Сбросить сессию
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}
             </div>
+
+            {selectedGroup && (
+              <DeviceToken groupId={selectedGroup.id} />
+            )}
           </div>
         )}
 
@@ -245,167 +323,39 @@ export default function Admin({ user, onBack }) {
 }
 
 const styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100vh',
-    background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    padding: '12px 16px',
-    background: '#0f3460',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-    minHeight: '56px',
-  },
-  headerTitle: {
-    fontSize: '16px',
-    fontWeight: 'bold',
-    color: '#eee',
-  },
-  backBtn: {
-    background: 'transparent',
-    color: '#e94560',
-    fontSize: '16px',
-    padding: '4px 8px',
-    borderRadius: '8px',
-  },
-  groupSelector: {
-    display: 'flex',
-    gap: '8px',
-    padding: '12px 16px',
-    overflowX: 'auto',
-    background: '#16213e',
-  },
-  groupBtn: {
-    padding: '8px 16px',
-    borderRadius: '20px',
-    color: 'white',
-    fontSize: '14px',
-    whiteSpace: 'nowrap',
-  },
-  tabs: {
-    display: 'flex',
-    background: '#16213e',
-    borderBottom: '1px solid #1a4a7a',
-  },
-  tab: {
-    flex: 1,
-    padding: '12px',
-    background: 'transparent',
-    color: '#eee',
-    fontSize: '14px',
-    borderRadius: 0,
-  },
-  content: {
-    flex: 1,
-    overflowY: 'auto',
-  },
-  section: {
-    padding: '16px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-  },
-  addBtn: {
-    background: '#1a4a7a',
-    color: 'white',
-    padding: '12px',
-    borderRadius: '8px',
-    fontSize: '15px',
-    width: '100%',
-  },
-  addForm: {
-    background: '#0f3460',
-    borderRadius: '12px',
-    padding: '16px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-  },
-  input: {
-    padding: '12px',
-    borderRadius: '8px',
-    border: '1px solid #1a4a7a',
-    background: '#16213e',
-    color: '#eee',
-    fontSize: '15px',
-  },
-  saveBtn: {
-    background: '#e94560',
-    color: 'white',
-    padding: '12px',
-    borderRadius: '8px',
-    fontSize: '15px',
-    fontWeight: 'bold',
-  },
-  list: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-  },
-  userRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    background: '#0f3460',
-    borderRadius: '10px',
-    padding: '12px 16px',
-  },
-  userName: {
-    fontSize: '15px',
-    marginRight: '8px',
-  },
-  roleTag: {
-    fontSize: '11px',
-    padding: '2px 8px',
-    borderRadius: '10px',
-    color: 'white',
-  },
-  removeBtn: {
-    background: 'transparent',
-    fontSize: '18px',
-    padding: '4px',
-  },
-  logRow: {
-    display: 'flex',
-    gap: '8px',
-    alignItems: 'center',
-    background: '#0f3460',
-    borderRadius: '10px',
-    padding: '10px 12px',
-    flexWrap: 'wrap',
-  },
-  logTime: {
-    fontSize: '12px',
-    color: '#aaa',
-    whiteSpace: 'nowrap',
-  },
-  logUser: {
-    fontSize: '13px',
-    color: '#e94560',
-    fontWeight: 'bold',
-  },
-  logAction: {
-    fontSize: '13px',
-    color: '#eee',
-  },
-  error: {
-    color: '#e94560',
-    padding: '8px 16px',
-    fontSize: '14px',
-  },
-  success: {
-    color: '#27ae60',
-    padding: '8px 16px',
-    fontSize: '14px',
-  },
-  center: {
-    flex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  container: { display: 'flex', flexDirection: 'column', height: '100vh', background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)' },
+  header: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: '#0f3460', boxShadow: '0 2px 8px rgba(0,0,0,0.3)', minHeight: '56px' },
+  headerTitle: { fontSize: '16px', fontWeight: 'bold', color: '#eee' },
+  backBtn: { background: 'transparent', color: '#e94560', fontSize: '16px', padding: '4px 8px', borderRadius: '8px' },
+  groupSelector: { display: 'flex', gap: '8px', padding: '12px 16px', overflowX: 'auto', background: '#16213e' },
+  groupBtn: { padding: '8px 16px', borderRadius: '20px', color: 'white', fontSize: '14px', whiteSpace: 'nowrap' },
+  tabs: { display: 'flex', background: '#16213e', borderBottom: '1px solid #1a4a7a' },
+  tab: { flex: 1, padding: '12px', background: 'transparent', color: '#eee', fontSize: '14px', borderRadius: 0 },
+  content: { flex: 1, overflowY: 'auto' },
+  section: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  addBtn: { background: '#1a4a7a', color: 'white', padding: '12px', borderRadius: '8px', fontSize: '15px', width: '100%' },
+  addForm: { background: '#0f3460', borderRadius: '12px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' },
+  input: { padding: '12px', borderRadius: '8px', border: '1px solid #1a4a7a', background: '#16213e', color: '#eee', fontSize: '15px' },
+  saveBtn: { background: '#e94560', color: 'white', padding: '12px', borderRadius: '8px', fontSize: '15px', fontWeight: 'bold' },
+  checkRow: { display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', padding: '4px 0' },
+  checkLabel: { color: '#eee', fontSize: '14px' },
+  list: { display: 'flex', flexDirection: 'column', gap: '8px' },
+  userCard: { background: '#0f3460', borderRadius: '10px', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' },
+  userMain: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+  userInfo: { display: 'flex', alignItems: 'center', gap: '8px' },
+  userName: { fontSize: '15px' },
+  roleTag: { fontSize: '11px', padding: '2px 8px', borderRadius: '10px', color: 'white' },
+  sessionTag: { fontSize: '10px', color: '#27ae60' },
+  removeBtn: { background: 'transparent', fontSize: '18px', padding: '4px' },
+  userFooter: { display: 'flex', alignItems: 'center', gap: '12px', paddingTop: '4px', borderTop: '1px solid #1a4a7a' },
+  toggleRow: { display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' },
+  toggleLabel: { fontSize: '12px', color: '#aaa' },
+  resetBtn: { background: 'transparent', color: '#e94560', fontSize: '12px', border: '1px solid #e9456066', padding: '4px 10px', borderRadius: '6px' },
+  logRow: { display: 'flex', gap: '8px', alignItems: 'center', background: '#0f3460', borderRadius: '10px', padding: '10px 12px', flexWrap: 'wrap' },
+  logTime: { fontSize: '12px', color: '#aaa', whiteSpace: 'nowrap' },
+  logUser: { fontSize: '13px', color: '#e94560', fontWeight: 'bold' },
+  logAction: { fontSize: '13px', color: '#eee' },
+  error: { color: '#e94560', padding: '8px 16px', fontSize: '14px' },
+  success: { color: '#27ae60', padding: '8px 16px', fontSize: '14px' },
+  center: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' },
 }

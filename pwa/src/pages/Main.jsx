@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { getMyGroups } from '../api'
 import ButtonGrid from '../components/ButtonGrid'
+import ExpiryWarning from '../components/ExpiryWarning'
 
-export default function Main({ user, onLogout, onAdminTab }) {
+export default function Main({ user, onLogout, onAdminTab, onSuperAdminTab  }) {
   const [groups, setGroups] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -75,7 +76,12 @@ export default function Main({ user, onLogout, onAdminTab }) {
       <div style={styles.header}>
         <span style={styles.headerTitle}>🔑 Привратник</span>
         <div style={styles.headerRight}>
-          {isAdmin && (
+          {user.role === 'superadmin' && (
+            <button style={styles.adminBtn} onClick={onSuperAdminTab}>
+              👑
+            </button>
+          )}
+          {(user.role === 'admin' || user.role === 'superadmin') && (
             <button style={styles.adminBtn} onClick={onAdminTab}>
               ⚙️
             </button>
@@ -85,6 +91,9 @@ export default function Main({ user, onLogout, onAdminTab }) {
           </button>
         </div>
       </div>
+
+      {/* Предупреждения о сроке */}
+      <ExpiryWarning groups={groups} />
 
       {/* Основная область с кнопками */}
       <div style={styles.content}>
@@ -109,9 +118,22 @@ export default function Main({ user, onLogout, onAdminTab }) {
           </div>
         )}
 
-        {!loading && !error && groups.length > 0 && (
+        {/* Все группы заблокированы */}
+        {!loading && !error && groups.length > 0 &&
+         groups.every(g => g.status === 'blocked') && (
+          <div style={styles.blocked}>
+            <span style={{ fontSize: '64px' }}>🔒</span>
+            <h2 style={styles.blockedTitle}>Доступ заблокирован</h2>
+            <p style={styles.blockedText}>
+              Срок действия истёк.{'\n'}Обратитесь к администратору.
+            </p>
+          </div>
+        )}
+
+        {!loading && !error && groups.length > 0 &&
+         !groups.every(g => g.status === 'blocked') && (
           <ButtonGrid
-            groups={groups}
+            groups={groups.filter(g => g.status !== 'blocked')}
             onStateChange={handleStateChange}
           />
         )}
@@ -181,5 +203,26 @@ const styles = {
     padding: '10px 24px',
     borderRadius: '8px',
     fontSize: '16px',
+  },
+  blocked: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '16px',
+    padding: '32px',
+    textAlign: 'center',
+  },
+  blockedTitle: {
+    fontSize: '22px',
+    fontWeight: 'bold',
+    color: '#e94560',
+  },
+  blockedText: {
+    fontSize: '16px',
+    color: '#aaa',
+    lineHeight: 1.6,
+    whiteSpace: 'pre-line',
   },
 }
