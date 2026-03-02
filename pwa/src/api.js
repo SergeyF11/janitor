@@ -21,10 +21,9 @@ export function setLogoutCallback(fn) {
 
 // ── Базовый fetch с авто-refresh ──────────────────────────────
 async function apiFetch(path, opts = {}) {
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(opts.headers || {}),
-  }
+  const headers = { ...(opts.headers || {}) }
+  // Content-Type только если есть тело — иначе Fastify вернёт 400
+  if (opts.body) headers['Content-Type'] = 'application/json'
   if (_accessToken) headers['Authorization'] = `Bearer ${_accessToken}`
 
   const res = await fetch(`${BASE}${path}`, {

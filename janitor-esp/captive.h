@@ -60,7 +60,7 @@ public:
         } else if (upload.status == UPLOAD_FILE_END) {
           if (_certFile) {
             _certFile.close();
-            _ptr->_statusMsg = "✅ Сертификат загружен (" + String(upload.totalSize) + " б)";
+            _ptr->_statusMsg = F("✅ Сертификат загружен (") + String(upload.totalSize) + " б)";
             _ptr->_statusOk  = true;
             Serial.printf("[Portal] Cert saved: %d bytes\n", upload.totalSize);
           }
@@ -167,7 +167,7 @@ private:
         GP.TITLE("Реле " + String(i+1));
         bool validRelay = _cfg->relays[i].pin != (uint8_t)NOT_A_PIN;
 
-        GP.NUMBER("p" + String(i), "GPIO пин", _cfg->relays[i].pin);
+        GP.NUMBER("p" + String(i), "GPIO пин", validRelay ? _cfg->relays[i].pin : NOT_A_PIN );
                 
         GP.LABEL("Активный LOW" );
         GP.CHECK("al" + String(i), _cfg->relays[i].active_low, GP_GRAY );
@@ -316,7 +316,7 @@ private:
       //_cfg->tz = EspTime::getTz();
       strncpy( _cfg->tz, EspTime::getTz(), sizeof(_cfg->tz));
       Storage.saveConfig(*_cfg);
-      _statusMsg = "✅ WiFi сохранён";  _statusOk = true;
+      _statusMsg = F("✅ WiFi сохранён");  _statusOk = true;
       Serial.println(F("[Portal] WiFi saved"));
     }
 
@@ -324,20 +324,23 @@ private:
       //_cfg->relay_count = constrain(_portal.getInt("rc"), 1, MAX_RELAYS);
       //_cfg->relayCount();
       for (uint8_t i = 0; i < MAX_RELAYS; i++) {
-        _cfg->relays[i].pin        = _portal.getInt("p"  + String(i));
-        _cfg->relays[i].active_low = _portal.getBool("al" + String(i));
-        // Имя — сохраняем часть до | и добавляем топик после |
-        String newName = _portal.getString("rn" + String(i));
-        String cur = _cfg->relays[i].name;
-        int sep = cur.indexOf('|');
-        String full = newName + (sep >= 0 ? cur.substring(sep) : "");
-        strlcpy(_cfg->relays[i].name, full.c_str(), sizeof(_cfg->relays[i].name));
-        
+        bool validPin = ! _portal.getString("p" + String(i)).isEmpty() ;
+        _cfg->relays[i].pin  = validPin ? _portal.getInt("p"  + String(i)) : (uint8_t)NOT_A_PIN;
+        validPin = _cfg->relays[i].pin != (uint8_t)NOT_A_PIN;
+        if ( validPin ){
+          _cfg->relays[i].active_low = _portal.getBool("al" + String(i));
+          // Имя — сохраняем часть до | и добавляем топик после |
+          String newName = _portal.getString("rn" + String(i));
+          String cur = _cfg->relays[i].name;
+          int sep = cur.indexOf('|');
+          String full = newName + (sep >= 0 ? cur.substring(sep) : "");
+          strlcpy(_cfg->relays[i].name, full.c_str(), sizeof(_cfg->relays[i].name));
+        }
       }
       strncpy( _cfg->tz, EspTime::getTz(), sizeof(_cfg->tz));
       // _cfg->relayCount();
       Storage.saveConfig(*_cfg);
-      _statusMsg = "✅ Реле сохранены";  _statusOk = true;
+      _statusMsg = F("✅ Реле сохранены");  _statusOk = true;
     }
 
     if (_portal.form("/register_relay")) {
@@ -351,10 +354,10 @@ private:
 
           strncpy( _cfg->tz, EspTime::getTz(), sizeof(_cfg->tz));                 
           Storage.saveConfig(*_cfg);
-          _statusMsg = "✅ Код сохранён, привязка при перезагрузке";
+          _statusMsg = F("✅ Код сохранён, привязка при перезагрузке");
           _statusOk  = true;
         } else {
-          _statusMsg = "❌ Код должен содержать 6 цифр";
+          _statusMsg = F("❌ Код должен содержать 6 цифр");
           _statusOk  = false;
         }
       }
@@ -362,7 +365,7 @@ private:
 
     if (_portal.form("/delete_cert")) {
       LittleFS.remove(CERT_FILE);
-      _statusMsg = "🗑️ Сертификат удалён";  _statusOk = true;
+      _statusMsg = F("🗑️ Сертификат удалён");  _statusOk = true;
     }
 
     if (_portal.form("/reset")) {

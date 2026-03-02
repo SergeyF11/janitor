@@ -22,7 +22,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/janitor/api': {
-        target: 'http://localhost:3000',
+        target: 'https://smilart.ru',
         changeOrigin: true,
         ws: true,
       }

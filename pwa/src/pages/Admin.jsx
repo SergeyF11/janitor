@@ -107,7 +107,14 @@ export default function Admin({ user, onLogout }) {
       <header className="admin-header">
         <h1 className="admin-title">Управление</h1>
         <div className="admin-header-right">
-          <span className="admin-login">{user.login}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+            <span className="admin-login">{user.login}</span>
+            <span style={{ fontSize: 11, color: 'var(--text2)', fontFamily: 'monospace' }}
+                  title="Ваш ID для передачи другим администраторам">
+              {user.id}
+              <button className="btn-copy" onClick={() => navigator.clipboard?.writeText(user.id)} title="Скопировать ID">📋</button>
+            </span>
+          </div>
           <button className="btn btn-outline btn-sm" onClick={handleLogout}>Выйти</button>
         </div>
       </header>
@@ -170,19 +177,23 @@ export default function Admin({ user, onLogout }) {
                                 onClick={() => setAddMode('existing')}>По ID</button>
                       </div>
 
-                      <form onSubmit={handleAddUser} className="add-user-form">
+                      <form onSubmit={handleAddUser} className="add-user-form" autoComplete="off">
                         {addMode === 'new' ? (
                           <>
                             <div className="field-row">
                               <div className="field">
                                 <label>Логин</label>
-                                <input value={newUser.login}
-                                       onChange={e => setNewUser(u => ({ ...u, login: e.target.value }))}
-                                       required />
+                                  <input
+                                      autoComplete="off"
+                                      value={newUser.login}
+                                      onChange={e => setNewUser(u => ({ ...u, login: e.target.value }))}
+                                      required
+                                    />
                               </div>
                               <div className="field">
                                 <label>Пароль</label>
                                 <input type="password" value={newUser.password}
+                                       autoComplete="new-password"
                                        onChange={e => setNewUser(u => ({ ...u, password: e.target.value }))}
                                        required minLength={6} />
                               </div>

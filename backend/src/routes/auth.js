@@ -90,12 +90,18 @@ async function authRoutes(app) {
     }
   })
 
-  // POST /api/auth/logout
-  app.post('/auth/logout', {
-    onRequest: [authenticate]
-  }, async (req, reply) => {
+  // POST /api/auth/logout — auth необязательна
+  app.post('/auth/logout', async (req, reply) => {
     const token = req.cookies?.[REFRESH_COOKIE]
-    await logoutUser(req.user.id, token)
+    let userId = null
+    try { await req.jwtVerify(); userId = req.user?.sub } catch {}
+    if (userId) {
+      await logoutUser(userId, token)
+    } else if (token) {
+      const { getDb } = require('../db/connection')
+      const { hashToken } = require('../services/auth.service')
+      await getDb()`DELETE FROM refresh_tokens WHERE token_hash = ${hashToken(token)}`
+    }
     reply.clearCookie(REFRESH_COOKIE, { path: '/janitor/api/auth' })
     return { ok: true }
   })

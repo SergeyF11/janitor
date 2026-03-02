@@ -16,14 +16,15 @@ const TAB_LABELS = {
 }
 
 export default function SuperAdmin({ user, onLogout }) {
-  const [tab, setTab]       = useState('stats')
-  const [data, setData]     = useState(null)
+  const [tab, setTab]         = useState('stats')
+  const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError]   = useState(null)
+  const [error, setError]     = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setData(null)
     try {
       const loaders = {
         stats:   saGetStats,
@@ -32,7 +33,7 @@ export default function SuperAdmin({ user, onLogout }) {
         users:   () => saGetUsers({ limit: 100 }),
         devices: saGetDevices,
         logs:    () => saGetLogs({ limit: 100 }),
-        sql:     () => null,
+        sql:     () => Promise.resolve(null),
       }
       const result = await loaders[tab]()
       setData(result)
@@ -48,6 +49,18 @@ export default function SuperAdmin({ user, onLogout }) {
   async function handleLogout() {
     await logout()
     onLogout()
+  }
+
+  function renderTab() {
+    if (tab === 'sql') return <SqlTab />
+    if (tab === 'stats') return <StatsTab data={data} />
+    const arr = Array.isArray(data) ? data : []
+    if (tab === 'admins')  return <AdminsTab  data={arr} reload={load} />
+    if (tab === 'groups')  return <GroupsTab  data={arr} reload={load} />
+    if (tab === 'users')   return <UsersTab   data={arr} reload={load} />
+    if (tab === 'devices') return <DevicesTab data={arr} reload={load} />
+    if (tab === 'logs')    return <LogsTab    data={arr} reload={load} />
+    return null
   }
 
   return (
@@ -72,18 +85,8 @@ export default function SuperAdmin({ user, onLogout }) {
 
         <main className="sa-content">
           {loading && <div className="sa-loading"><div className="spinner" /></div>}
-          {error   && <div className="sa-error">{error}</div>}
-          {!loading && !error && (
-            <>
-              {tab === 'stats'   && <StatsTab   data={data} />}
-              {tab === 'admins'  && <AdminsTab  data={data} reload={load} />}
-              {tab === 'groups'  && <GroupsTab  data={data} reload={load} />}
-              {tab === 'users'   && <UsersTab   data={data} reload={load} />}
-              {tab === 'devices' && <DevicesTab data={data} reload={load} />}
-              {tab === 'logs'    && <LogsTab    data={data} reload={load} />}
-              {tab === 'sql'     && <SqlTab />}
-            </>
-          )}
+          {!loading && error && <div className="sa-error">{error}</div>}
+          {!loading && !error && renderTab()}
         </main>
       </div>
     </div>
@@ -92,16 +95,16 @@ export default function SuperAdmin({ user, onLogout }) {
 
 // ── Статистика ────────────────────────────────────────────────
 function StatsTab({ data }) {
-  if (!data) return null
+  if (!data) return <div className="empty-state">Нет данных</div>
   const items = [
-    { label: 'Пользователей',  value: data.total_users },
+    { label: 'Пользователей',   value: data.total_users },
     { label: 'Администраторов', value: data.total_admins },
-    { label: 'Групп',          value: data.total_groups },
-    { label: 'Устройств',      value: data.total_devices },
-    { label: 'Онлайн',         value: data.online_devices },
+    { label: 'Групп',           value: data.total_groups },
+    { label: 'Устройств',       value: data.total_devices },
+    { label: 'Онлайн',          value: data.online_devices },
     { label: 'Активных сессий', value: data.active_sessions },
-    { label: 'Событий за 24ч', value: data.events_24h },
-    { label: 'Входов за 24ч',  value: data.logins_24h },
+    { label: 'Событий за 24ч',  value: data.events_24h },
+    { label: 'Входов за 24ч',   value: data.logins_24h },
   ]
   return (
     <div className="stats-grid">
@@ -118,10 +121,10 @@ function StatsTab({ data }) {
 // ── Администраторы ────────────────────────────────────────────
 function AdminsTab({ data, reload }) {
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ login: '', password: '', single_session: true })
-  const [resetPwd, setResetPwd] = useState({})  // id → новый пароль
+  const [form, setForm]     = useState({ login: '', password: '', single_session: true })
+  const [resetPwd, setResetPwd] = useState({})
   const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState(null)
+  const [err, setErr]       = useState(null)
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -132,21 +135,31 @@ function AdminsTab({ data, reload }) {
       setShowCreate(false)
       reload()
     } catch (e) {
-      setErr(e.message === 'login_taken' ? 'Логин занят.' : 'Ошибка.')
+      setErr(e.message === 'login_taken' ? 'Логин занят.' : 'Ошибка: ' + e.message)
     } finally { setSaving(false) }
   }
 
   async function handleDelete(id, login) {
     if (!confirm(`Удалить администратора ${login}?`)) return
-    await saDeleteAdmin(id); reload()
+    try { await saDeleteAdmin(id); reload() } catch (e) { alert(e.message) }
   }
 
   async function handleResetPwd(id) {
-    const pwd = resetPwd[id]?.trim()
-    if (!pwd || pwd.length < 6) return
-    await saResetAdminPassword(id, pwd)
-    setResetPwd(p => ({ ...p, [id]: '' }))
-    alert('Пароль сброшен.')
+    const pwd = (resetPwd[id] || '').trim()
+    if (pwd.length < 6) return alert('Минимум 6 символов')
+    try {
+      await saResetAdminPassword(id, pwd)
+      setResetPwd(p => ({ ...p, [id]: '' }))
+      alert('Пароль сброшен.')
+    } catch (e) { alert(e.message) }
+  }
+
+  async function handleResetSession(id) {
+    try { await saResetAdminSessions(id); reload() } catch (e) { alert(e.message) }
+  }
+
+  async function handleToggle(id, field, val) {
+    try { await saUpdateAdmin(id, { [field]: val }); reload() } catch (e) { alert(e.message) }
   }
 
   return (
@@ -162,12 +175,15 @@ function AdminsTab({ data, reload }) {
           <div className="field-row">
             <div className="field">
               <label>Логин</label>
-              <input value={form.login} onChange={e => setForm(f => ({ ...f, login: e.target.value }))} required />
+              <input value={form.login}
+                     onChange={e => setForm(f => ({ ...f, login: e.target.value }))}
+                     required minLength={3} />
             </div>
             <div className="field">
               <label>Пароль</label>
               <input type="password" value={form.password}
-                     onChange={e => setForm(f => ({ ...f, password: e.target.value }))} required minLength={6} />
+                     onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                     required minLength={6} />
             </div>
             <div className="field field-checkbox">
               <label>
@@ -185,44 +201,49 @@ function AdminsTab({ data, reload }) {
       )}
 
       <div className="sa-list">
-        {(data || []).map(a => (
+        {data.length === 0 && <div className="empty-state">Нет администраторов</div>}
+        {data.map(a => (
           <div key={a.id} className="sa-row">
             <div className="sa-row-main">
               <span className="sa-row-login">{a.login}</span>
               {a.display_name && <span className="sa-row-name">{a.display_name}</span>}
-              {a.has_session && <span className="session-dot" title="Активная сессия">●</span>}
-              {!a.is_active  && <span className="badge-inactive">заблокирован</span>}
+              {a.has_session  && <span className="session-dot" title="Активная сессия">●</span>}
+              {!a.is_active   && <span className="badge-inactive">заблокирован</span>}
               <span className={`badge-ss ${a.single_session ? 'on' : 'off'}`}>
                 {a.single_session ? '🔒' : '🔓'}
               </span>
             </div>
-            <div className="sa-row-groups">
-              {(a.groups || []).map(g => (
-                <span key={g.id} className="badge-group">{g.name}</span>
-              ))}
-            </div>
+
+            {(a.groups || []).length > 0 && (
+              <div className="sa-row-groups">
+                {a.groups.map(g => (
+                  <span key={g.id} className="badge-group">{g.name}</span>
+                ))}
+              </div>
+            )}
+
             <div className="sa-row-actions">
               <button className="btn btn-outline btn-xs"
-                      onClick={() => saUpdateAdmin(a.id, { single_session: !a.single_session }).then(reload)}>
-                {a.single_session ? '🔒' : '🔓'}
+                      onClick={() => handleToggle(a.id, 'single_session', !a.single_session)}>
+                {a.single_session ? '🔒 1 сессия' : '🔓 мульти'}
               </button>
               <button className="btn btn-outline btn-xs"
-                      onClick={() => saUpdateAdmin(a.id, { is_active: !a.is_active }).then(reload)}>
+                      onClick={() => handleToggle(a.id, 'is_active', !a.is_active)}>
                 {a.is_active ? 'Блок' : 'Разблок'}
               </button>
               <button className="btn btn-outline btn-xs"
-                      onClick={() => saResetAdminSessions(a.id).then(reload)}>
+                      onClick={() => handleResetSession(a.id)}>
                 ⏏ Сессия
               </button>
-              <input className="input-inline" placeholder="Новый пароль"
+              <input className="input-inline" placeholder="Новый пароль" type="password"
                      value={resetPwd[a.id] || ''}
                      onChange={e => setResetPwd(p => ({ ...p, [a.id]: e.target.value }))} />
-              <button className="btn btn-warning btn-xs" onClick={() => handleResetPwd(a.id)}>
+              <button className="btn btn-warning btn-xs"
+                      onClick={() => handleResetPwd(a.id)}>
                 Сбросить пароль
               </button>
-              <button className="btn btn-danger btn-xs" onClick={() => handleDelete(a.id, a.login)}>
-                ✕
-              </button>
+              <button className="btn btn-danger btn-xs"
+                      onClick={() => handleDelete(a.id, a.login)}>✕</button>
             </div>
           </div>
         ))}
@@ -234,9 +255,15 @@ function AdminsTab({ data, reload }) {
 // ── Группы ────────────────────────────────────────────────────
 function GroupsTab({ data, reload }) {
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
+  const [form, setForm]     = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
+  const [assignId, setAssignId] = useState({})  // groupId → selected adminId
+  const [allAdmins, setAllAdmins] = useState([])
+
+  useEffect(() => {
+    saGetAdmins().then(setAllAdmins).catch(() => {})
+  }, [])
   const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState(null)
+  const [err, setErr]       = useState(null)
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -246,13 +273,36 @@ function GroupsTab({ data, reload }) {
       setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
       setShowCreate(false); reload()
     } catch (e) {
-      setErr(e.message === 'mqtt_topic_taken' ? 'MQTT топик занят.' : 'Ошибка.')
+      setErr(e.message === 'mqtt_topic_taken' ? 'MQTT топик занят.' : 'Ошибка: ' + e.message)
     } finally { setSaving(false) }
   }
 
   async function handleDelete(id, name) {
-    if (!confirm(`Удалить группу "${name}"? Все пользователи без других групп будут удалены.`)) return
-    await saDeleteGroup(id); reload()
+    if (!confirm(`Удалить группу "${name}"?\nПользователи без других групп будут удалены.`)) return
+    try { await saDeleteGroup(id); reload() } catch (e) { alert(e.message) }
+  }
+
+  async function handleToggleStatus(g) {
+    const newStatus = g.status === 'active' ? 'blocked' : 'active'
+    try { await saUpdateGroup(g.id, { status: newStatus }); reload() } catch (e) { alert(e.message) }
+  }
+
+  async function handleAssignAdmin(groupId) {
+    const id = (assignId[groupId] || '').trim()
+    if (!id) return
+    try {
+      await saAssignGroupAdmin(groupId, id)
+      setAssignId(a => ({ ...a, [groupId]: '' }))
+      reload()
+    } catch (e) {
+      alert(e.message === 'user_not_found' ? 'Администратор не найден' :
+            e.message === 'user_is_not_admin' ? 'Пользователь не является администратором' :
+            e.message)
+    }
+  }
+
+  async function handleRemoveAdmin(groupId, adminId) {
+    try { await saRemoveGroupAdmin(groupId, adminId); reload() } catch (e) { alert(e.message) }
   }
 
   return (
@@ -268,15 +318,18 @@ function GroupsTab({ data, reload }) {
           <div className="field-row">
             <div className="field">
               <label>Название</label>
-              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
+              <input value={form.name}
+                     onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                     required />
             </div>
             <div className="field">
               <label>MQTT топик</label>
               <input value={form.mqtt_topic}
-                     onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value }))} required />
+                     onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value }))}
+                     required />
             </div>
             <div className="field">
-              <label>Длит. реле (мс, 0=триггер)</label>
+              <label>Длит. реле мс (0=триггер)</label>
               <input type="number" min="0" value={form.relay_duration_ms}
                      onChange={e => setForm(f => ({ ...f, relay_duration_ms: +e.target.value }))} />
             </div>
@@ -294,29 +347,55 @@ function GroupsTab({ data, reload }) {
       )}
 
       <div className="sa-list">
-        {(data || []).map(g => (
+        {data.length === 0 && <div className="empty-state">Нет групп</div>}
+        {data.map(g => (
           <div key={g.id} className="sa-row">
             <div className="sa-row-main">
               <span className="sa-row-login">{g.name}</span>
               <span className="badge-topic">{g.mqtt_topic}</span>
               <span className={`badge-status ${g.status}`}>{g.status}</span>
-              <span className="sa-row-meta">{g.user_count} польз. · {g.admin_count} адм.</span>
+              <span className="sa-row-meta">
+                {g.user_count} польз. · {g.admin_count} адм.
+                {g.user_quota > 0 && ` · квота: ${g.user_quota}`}
+              </span>
             </div>
-            <div className="sa-row-admins">
-              {(g.admins || []).map(a => (
-                <span key={a.id} className="badge-admin">
-                  {a.login}
-                  <button className="badge-remove"
-                          onClick={() => saRemoveGroupAdmin(g.id, a.id).then(reload)}>×</button>
-                </span>
-              ))}
-            </div>
+
+            {/* Текущие администраторы группы */}
+            {(g.admins || []).length > 0 && (
+              <div className="sa-row-admins">
+                <span style={{ fontSize: 12, color: 'var(--text2)' }}>Адм: </span>
+                {g.admins.map(a => (
+                  <span key={a.id} className="badge-admin">
+                    {a.login}
+                    <button className="badge-remove"
+                            onClick={() => handleRemoveAdmin(g.id, a.id)}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Назначить администратора */}
             <div className="sa-row-actions">
+              <select
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}
+                value={assignId[g.id] || ''}
+                onChange={e => setAssignId(a => ({ ...a, [g.id]: e.target.value }))}
+              >
+                <option value="">— выбрать администратора —</option>
+                {allAdmins.map(a => (
+                  <option key={a.id} value={a.id}>{a.login}</option>
+                ))}
+              </select>
               <button className="btn btn-outline btn-xs"
-                      onClick={() => saUpdateGroup(g.id, { status: g.status === 'active' ? 'blocked' : 'active' }).then(reload)}>
+                      onClick={() => handleAssignAdmin(g.id)}>
+                + Назначить
+              </button>
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => handleToggleStatus(g)}>
                 {g.status === 'active' ? 'Блок' : 'Разблок'}
               </button>
-              <button className="btn btn-danger btn-xs" onClick={() => handleDelete(g.id, g.name)}>✕</button>
+              <button className="btn btn-danger btn-xs"
+                      onClick={() => handleDelete(g.id, g.name)}>✕</button>
             </div>
           </div>
         ))}
@@ -330,39 +409,53 @@ function UsersTab({ data, reload }) {
   const [resetPwd, setResetPwd] = useState({})
 
   async function handleResetPwd(id) {
-    const pwd = resetPwd[id]?.trim()
-    if (!pwd || pwd.length < 6) return
-    await saResetUserPassword(id, pwd)
-    setResetPwd(p => ({ ...p, [id]: '' }))
-    alert('Пароль сброшен.')
+    const pwd = (resetPwd[id] || '').trim()
+    if (pwd.length < 6) return alert('Минимум 6 символов')
+    try {
+      await saResetUserPassword(id, pwd)
+      setResetPwd(p => ({ ...p, [id]: '' }))
+      alert('Пароль сброшен.')
+    } catch (e) { alert(e.message) }
+  }
+
+  async function handleToggle(id, field, val) {
+    try { await saUpdateUser(id, { [field]: val }); reload() } catch (e) { alert(e.message) }
+  }
+
+  async function handleResetSession(id) {
+    try { await saResetUserSessions(id); reload() } catch (e) { alert(e.message) }
   }
 
   return (
     <div className="sa-tab">
       <div className="sa-list">
-        {(data || []).map(u => (
+        {data.length === 0 && <div className="empty-state">Нет пользователей</div>}
+        {data.map(u => (
           <div key={u.id} className="sa-row">
             <div className="sa-row-main">
               <span className="sa-row-login">{u.login}</span>
               {u.display_name && <span className="sa-row-name">{u.display_name}</span>}
               <span className={`user-role role-${u.role}`}>{u.role}</span>
-              {u.has_session && <span className="session-dot">●</span>}
+              {u.has_session && <span className="session-dot" title="Активная сессия">●</span>}
               {!u.is_active  && <span className="badge-inactive">заблокирован</span>}
               <span className="sa-row-meta">{u.group_count} групп</span>
             </div>
             <div className="sa-row-actions">
               <button className="btn btn-outline btn-xs"
-                      onClick={() => saUpdateUser(u.id, { is_active: !u.is_active }).then(reload)}>
+                      onClick={() => handleToggle(u.id, 'is_active', !u.is_active)}>
                 {u.is_active ? 'Блок' : 'Разблок'}
               </button>
-              <button className="btn btn-outline btn-xs"
-                      onClick={() => saResetUserSessions(u.id).then(reload)}>
-                ⏏ Сессия
-              </button>
-              <input className="input-inline" placeholder="Новый пароль"
+              {u.has_session && (
+                <button className="btn btn-outline btn-xs"
+                        onClick={() => handleResetSession(u.id)}>
+                  ⏏ Сессия
+                </button>
+              )}
+              <input className="input-inline" placeholder="Новый пароль" type="password"
                      value={resetPwd[u.id] || ''}
                      onChange={e => setResetPwd(p => ({ ...p, [u.id]: e.target.value }))} />
-              <button className="btn btn-warning btn-xs" onClick={() => handleResetPwd(u.id)}>
+              <button className="btn btn-warning btn-xs"
+                      onClick={() => handleResetPwd(u.id)}>
                 Сбросить пароль
               </button>
             </div>
@@ -375,29 +468,36 @@ function UsersTab({ data, reload }) {
 
 // ── Устройства ────────────────────────────────────────────────
 function DevicesTab({ data, reload }) {
+  async function handleDelete(deviceId) {
+    if (!confirm(`Удалить устройство ${deviceId}?`)) return
+    try { await saDeleteDevice(deviceId); reload() } catch (e) { alert(e.message) }
+  }
+
   return (
     <div className="sa-tab">
       <div className="sa-list">
-        {(data || []).map(d => (
+        {data.length === 0 && <div className="empty-state">Нет устройств</div>}
+        {data.map(d => (
           <div key={d.device_id} className="sa-row">
             <div className="sa-row-main">
               <span className={`device-dot ${d.is_online ? 'online' : 'offline'}`} />
               <span className="sa-row-login"><code>{d.device_id}</code></span>
               <span className="sa-row-meta">
                 {d.fw_version || '—'} · {d.last_seen
-                  ? new Date(d.last_seen).toLocaleString('ru') : 'никогда'}
+                  ? new Date(d.last_seen).toLocaleString('ru')
+                  : 'никогда'}
               </span>
             </div>
-            <div className="sa-row-groups">
-              {(d.groups || []).filter(Boolean).map(g => (
-                <span key={g.group_id} className="badge-group">{g.name}</span>
-              ))}
-            </div>
+            {(d.groups || []).filter(Boolean).length > 0 && (
+              <div className="sa-row-groups">
+                {d.groups.filter(Boolean).map(g => (
+                  <span key={g.group_id} className="badge-group">{g.name}</span>
+                ))}
+              </div>
+            )}
             <div className="sa-row-actions">
               <button className="btn btn-danger btn-xs"
-                      onClick={() => { if (confirm('Удалить устройство?')) saDeleteDevice(d.device_id).then(reload) }}>
-                ✕
-              </button>
+                      onClick={() => handleDelete(d.device_id)}>✕</button>
             </div>
           </div>
         ))}
@@ -414,14 +514,17 @@ function LogsTab({ data, reload }) {
         <button className="btn btn-outline btn-sm" onClick={reload}>↻ Обновить</button>
       </div>
       <div className="logs-list">
-        {(data || []).map(l => (
+        {data.length === 0 && <div className="empty-state">Нет событий</div>}
+        {data.map(l => (
           <div key={l.id} className="log-entry">
             <span className="log-ts">{new Date(l.ts).toLocaleString('ru')}</span>
             <span className="log-actor">{l.actor_login || '—'}</span>
             <span className={`log-action action-${l.action}`}>{l.action}</span>
             {l.group_name && <span className="log-group">{l.group_name}</span>}
             {l.payload && (
-              <span className="log-payload">{JSON.stringify(l.payload).substring(0, 80)}</span>
+              <span className="log-payload">
+                {JSON.stringify(l.payload).substring(0, 80)}
+              </span>
             )}
             {l.ip && <span className="log-ip">{l.ip}</span>}
           </div>
@@ -433,9 +536,9 @@ function LogsTab({ data, reload }) {
 
 // ── SQL ───────────────────────────────────────────────────────
 function SqlTab() {
-  const [sql, setSql]       = useState('')
-  const [result, setResult] = useState(null)
-  const [error, setError]   = useState(null)
+  const [sql, setSql]         = useState('')
+  const [result, setResult]   = useState(null)
+  const [error, setError]     = useState(null)
   const [loading, setLoading] = useState(false)
 
   async function handleRun(e) {
@@ -462,7 +565,7 @@ function SqlTab() {
           rows={6}
           spellCheck={false}
         />
-        <button type="submit" className="btn btn-primary" disabled={loading}>
+        <button type="submit" className="btn btn-primary" disabled={loading || !sql.trim()}>
           {loading ? 'Выполнение...' : '▶ Выполнить'}
         </button>
       </form>
@@ -476,13 +579,18 @@ function SqlTab() {
             <div className="sql-table-wrap">
               <table className="sql-table">
                 <thead>
-                  <tr>{Object.keys(result.rows[0]).map(k => <th key={k}>{k}</th>)}</tr>
+                  <tr>
+                    {Object.keys(result.rows[0]).map(k => <th key={k}>{k}</th>)}
+                  </tr>
                 </thead>
                 <tbody>
                   {result.rows.map((row, i) => (
                     <tr key={i}>
                       {Object.values(row).map((v, j) => (
-                        <td key={j}>{v === null ? <i>null</i> : String(v).substring(0, 100)}</td>
+                        <td key={j}>
+                          {v === null ? <i style={{ color: 'var(--text2)' }}>null</i>
+                                      : String(v).substring(0, 100)}
+                        </td>
                       ))}
                     </tr>
                   ))}

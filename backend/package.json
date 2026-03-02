@@ -1,7 +1,7 @@
 {
   "name": "janitor-backend",
-  "version": "1.0.0",
-  "description": "Janitor relay control system - backend",
+  "version": "1.1.0",
+  "description": "Janitor access control system - backend",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

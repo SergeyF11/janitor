@@ -7,10 +7,11 @@ import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
 import Main from './pages/Main'
 import Admin from './pages/Admin'
+import SuperAdmin from './pages/SuperAdmin'
 import './App.css'
 
 export default function App() {
-  const [state, setState]   = useState('loading')  // loading | login | change_password | main | admin
+  const [state, setState]   = useState('loading')  // loading | login | change_password | main | admin | superadmin
   const [user, setUser]     = useState(null)
   const [error, setError]   = useState(null)
 
@@ -32,7 +33,9 @@ export default function App() {
           setUser(me)
           if (me.must_change_password) {
             setState('change_password')
-          } else if (me.role === 'admin' || me.role === 'superadmin') {
+          } else if (me.role === 'superadmin') {
+            setState('superadmin')
+          } else if (me.role === 'admin') {
             setState('admin')
           } else {
             setState('main')
@@ -51,7 +54,9 @@ export default function App() {
     setError(null)
     if (data.user.must_change_password) {
       setState('change_password')
-    } else if (data.user.role === 'admin' || data.user.role === 'superadmin') {
+    } else if (data.user.role === 'superadmin') {
+      setState('superadmin')
+    } else if (data.user.role === 'admin') {
       setState('admin')
     } else {
       setState('main')
@@ -60,7 +65,9 @@ export default function App() {
 
   const handlePasswordChanged = useCallback((data) => {
     setUser(data.user)
-    if (data.user.role === 'admin' || data.user.role === 'superadmin') {
+    if (data.user.role === 'superadmin') {
+      setState('superadmin')
+    } else if (data.user.role === 'admin') {
       setState('admin')
     } else {
       setState('main')
@@ -85,6 +92,10 @@ export default function App() {
 
   if (state === 'admin') {
     return <Admin user={user} onLogout={handleLogout} />
+  }
+
+  if (state === 'superadmin') {
+    return <SuperAdmin user={user} onLogout={handleLogout} />
   }
 
   return <Main user={user} onLogout={handleLogout} />

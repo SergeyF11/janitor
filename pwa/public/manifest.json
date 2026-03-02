@@ -3,7 +3,7 @@
   "name": "Привратник",
   "short_name": "Привратник",
   "description": "Система управления доступом",
-  "start_url": "/janitor/",
+  "start_url": "/janitor/?v=1.1.0",
   "scope": "/janitor/",
   "display": "standalone",
   "orientation": "portrait",

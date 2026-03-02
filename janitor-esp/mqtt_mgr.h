@@ -174,9 +174,15 @@ public:
         Serial.printf("[MQTT] Skip unregistred %s\n", _cfg->relays[i].name ); 
         continue;
       }
-      String uri = String("relay/") + topic + "/trigger";
-      _mqtt.subscribe(uri.c_str(), 1);
-      Serial.printf("[MQTT] Subscribed: %s\n", uri.c_str());
+      // String uri = String("relay/") + topic + "/trigger";
+      // _mqtt.subscribe(uri.c_str(), 1);
+      // Serial.printf("[MQTT] Subscribed: %s\n", uri.c_str());
+     
+      char uri[128];
+      snprintf(uri, sizeof(uri), relayTriggerTmpl, topic.c_str());
+      _mqtt.subscribe(uri, 1);
+
+      Serial.printf("[MQTT] Subscribed: %s\n", uri);
     }
 
     _lastHeartbeat = millis();
@@ -244,9 +250,16 @@ void tick() {
   // Публикация статуса реле
   void publishRelayStatus(uint8_t relayIndex, bool state) {
     if (!isConnected()) return;
-    String topic = String("relay/") + _getGroupTopic(relayIndex) + "/status";
-    String payload = state ? "{\"state\":\"on\"}" : "{\"state\":\"off\"}";
-    _mqtt.publish(topic.c_str(), payload.c_str(), true); // retained
+
+    static constexpr const char tmpl[] PROGMEM = "relay/%s/status";
+    char topic[128];
+    snprintf(topic, sizeof(topic), tmpl, _getGroupTopic(relayIndex).c_str());
+
+    _mqtt.publish(topic, state ? "{\"state\":\"on\"}" : "{\"state\":\"off\"}", true); // retained
+
+    // String topic = String("relay/") + _getGroupTopic(relayIndex) + "/status";
+    // String payload = state ? F("{\"state\":\"on\"}") : F("{\"state\":\"off\"}");
+    // _mqtt.publish(topic.c_str(), payload.c_str(), true); // retained
   }
 
 private:
@@ -257,6 +270,11 @@ private:
   unsigned long     _lastReconnect  = 0;
   unsigned long     _lastHeartbeat  = 0;
   static MqttManager* _instance;
+
+  static constexpr const char relayTriggerTmpl[] PROGMEM = "relay/%s/trigger";
+  static constexpr const char sysDevicesTmpl[] PROGMEM = "sys/devices/%s/%s";
+ 
+  //String topic = String(F("sys/devices/")) + mac + "/status";
 
   #ifndef ESP32
   X509List _x509;
@@ -293,8 +311,11 @@ private:
     for (uint8_t i = 0; i < MAX_RELAYS; i++) {
       if ( ! _cfg->relays[i].isValid() ) continue;
 
-      String expected = String("relay/") + _getGroupTopic(i) + "/trigger";
-      if (topicStr != expected) continue;
+      //String expected = String("relay/") + _getGroupTopic(i) + "/trigger";
+      char expected[128];
+      snprintf(expected, sizeof(expected), relayTriggerTmpl, _getGroupTopic(i).c_str());
+
+      if ( ! topicStr.equals( expected)) continue;
 
       if (strcmp(action, "pulse") == 0 && duration > 0) {
         // Импульсный режим
@@ -318,28 +339,34 @@ private:
   }
 
   void _publishOnline(const String& mac) {
-    String topic = String("sys/devices/") + mac + "/status";
+    //String topic = String(F("sys/devices/")) + mac + "/status";
+    char topic[128];
+    snprintf( topic, sizeof(topic), sysDevicesTmpl, mac.c_str(), "status");
+
     JsonDocument doc;
     doc["online"]     = true;
     doc["fw_version"] = FW_VERSION;
     doc["mac"]        = WiFi.macAddress();
     doc["ip"]         = WiFi.localIP().toString();
-    String payload;
+    String payload; payload.reserve(128);
     serializeJson(doc, payload);
-    _mqtt.publish(topic.c_str(), payload.c_str(), true);
+    _mqtt.publish(topic, payload.c_str(), true);
   }
 
   void _publishHeartbeat() {
     String mac = WiFi.macAddress();
     mac.replace(":", "");
-    String topic = String("sys/devices/") + mac + "/heartbeat";
+    //String topic = String(F("sys/devices/")) + mac + "/heartbeat";
+    char topic[128];
+    snprintf( topic, sizeof(topic), sysDevicesTmpl, mac.c_str(), "heartbeat");
+
     JsonDocument doc;
     doc["ts"]   = time(nullptr); // millis();
     doc["heap"] = ESP.getFreeHeap();
-    String payload;
+    String payload; payload.reserve(64);
     serializeJson(doc, payload);
-    _mqtt.publish(topic.c_str(), payload.c_str());
-    Serial.printf("[Heartbeat] %s = %s\n", topic.c_str(), payload.c_str());
+    _mqtt.publish(topic, payload.c_str());
+    Serial.printf("[Heartbeat] %s = %s\n", topic, payload.c_str());
   }
 };
 
