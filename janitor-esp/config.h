@@ -1,62 +1,56 @@
 #pragma once
 #include <Arduino.h>
 
-// ── Версия прошивки ───────────────────────────────────────────
-#define FW_VERSION        "1.0.0"
+#define FW_VERSION        "1.2.0"
 #define DEVICE_PREFIX     "JANITOR"
 
-// ── CaptivePortal ─────────────────────────────────────────────
-#define AP_SSID_PREFIX    "Janitor-"   // + последние 4 символа MAC
-#define AP_PASSWORD       ""           // открытая сеть
-#define PORTAL_TIMEOUT    300          // сек, 0 = без таймаута
+#define AP_SSID_PREFIX    "Janitor-"
+#define AP_PASSWORD       ""
+#define PORTAL_TIMEOUT    300
 
-// ── Сервер ────────────────────────────────────────────────────
 #define SERVER_HOST       "smilart.ru"
 #define SERVER_PORT       443
 #define API_REGISTER      "/janitor/api/device/register"
 #define MQTT_PORT_TLS     8883
 #define MQTT_PORT_PLAIN   1883
 
-// ── LittleFS ──────────────────────────────────────────────────
-#define CONFIG_FILE       "/config.json"
+#define CONFIG_FILE       "/config.json"   // WiFi + MQTT + код привязки
+#define RELAY_FILE        "/relay.json"    // Настройки реле (пины, имена, топик)
 #define CERT_FILE         "/cert.der"
 
-// ── Шифрование (AES-128-CBC) ──────────────────────────────────
-// Ключ генерируется из MAC адреса устройства — уникален для каждого
-#define CRYPTO_SALT       "JanitorSalt2024!"  // 16 байт
+#define CRYPTO_SALT       "JanitorSalt2024!"
 
-// ── LED ───────────────────────────────────────────────────────
 #ifdef ESP32
-  #define LED_PIN         2     // встроенный LED ESP32
+  #define LED_PIN         2
   #define LED_ACTIVE_LOW  false
 #else
   #define LED_PIN         LED_BUILTIN
-  #define LED_ACTIVE_LOW  true  // ESP8266 — активный низкий
+  #define LED_ACTIVE_LOW  true
 #endif
 
-// ── Таймауты ──────────────────────────────────────────────────
-#define WIFI_TIMEOUT_MS       20000   // 20 сек на подключение к WiFi
-#define MQTT_RECONNECT_MS     5000    // пауза между попытками MQTT
-#define HEARTBEAT_INTERVAL_MS 30000   // heartbeat каждые 30 сек
-#define NTP_TIMEOUT_MS        10000   // таймаут синхронизации NTP
+#define WIFI_TIMEOUT_MS       20000
+#define MQTT_RECONNECT_MS     5000
+#define NTP_TIMEOUT_MS        10000
 
-// ── NTP ───────────────────────────────────────────────────────
-#define NTP_SERVER1       "pool.ntp.org"
-#define NTP_SERVER2       "time.google.com"
-//#define NTP_TIMEZONE      3           // UTC+3 (Москва)
+#define NTP_SERVERS       "ru.pool.ntp.org","ntp.ix.ru","time.google.com"
 
-// ── Реле ──────────────────────────────────────────────────────
 #define MAX_RELAYS        4
 
-// ── Структуры данных ──────────────────────────────────────────
+// MQTT топики
+#define RELAY_CMD_TMPL    "relay/%s/cmd"
+#define RELAY_STATUS_TMPL "relay/%s/status"
+#define SYS_STATUS_TMPL   "sys/devices/%s/status"
+
+// ── Реле — только пин и имя, топик общий для устройства ───────
 struct RelayConfig {
-  uint8_t  pin;
-  bool     active_low;
-  char     name[32];
-  char     mqtt_code[7];   // 6-значный код привязки + \0
+  uint8_t pin;
+  bool    active_low;
+  char    name[32];     // отображаемое имя
+
   bool isValid() const { return pin != (uint8_t)NOT_A_PIN; }
 };
 
+// ── Основной конфиг устройства ────────────────────────────────
 struct DeviceConfig {
   // WiFi
   char wifi1_ssid[64];
@@ -64,61 +58,63 @@ struct DeviceConfig {
   char wifi2_ssid[64];
   char wifi2_psk[64];
 
-  // MQTT (заполняется после регистрации)
-  char mqtt_host[64];
+  // MQTT — заполняется при регистрации
+  char     mqtt_host[64];
   uint16_t mqtt_port;
-  char mqtt_user[64];
-  char mqtt_pass[64];
-  bool registered;          // true = уже прошли регистрацию
+  char     mqtt_user[64];
+  char     mqtt_pass[64];
+  char     mqtt_topic[64];  // общий топик для всех реле устройства
 
-  // TLS
-  bool tls_secure;          // true = проверять сертификат
-  char tz[16];
+  // Код привязки устройства (вводится один раз, очищается после регистрации)
+  char     reg_code[7];     // 6 цифр + \0
+
+  bool     registered;
+  bool     tls_secure;
+  char     tz[16];
+
   // Реле
-  //uint8_t relay_count;
-
   RelayConfig relays[MAX_RELAYS];
-  
-  uint8_t relayCount(){
-    uint8_t count = 0;
-    for ( uint8_t i =0; i < MAX_RELAYS; i++){
-    if ( ! relays[i].isValid() ) continue;
-      count++;
-    }
-    return count;  
-  };
 
-  size_t printTo(Stream& p){
-    size_t out;
-    out = p.printf("WiFi: %s/%s\n", wifi1_ssid, wifi1_psk);
-    if( strlen( wifi2_ssid)){
-        out += p.printf("WiFi2: %s/%s\n", wifi2_ssid, wifi2_psk);
-    }
-    out += p.print("TZ: "); out += p.println(tz);
-    out += p.print("MQTT: ");
+  // ── Вспомогательные методы ────────────────────────────────
+  uint8_t relayCount() const {
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < MAX_RELAYS; i++)
+      if (relays[i].isValid()) n++;
+    return n;
+  }
 
-    //auto relay_count = relayCount();
-    if ( registered ){
-        out += p.printf("%s:%s@%s:%u\n", mqtt_user, mqtt_pass, mqtt_host, mqtt_port);
+  bool hasPendingCode() const {
+    return strlen(reg_code) == 6;
+  }
+
+  bool isRegistered() const {
+    return registered && strlen(mqtt_host) > 0 && strlen(mqtt_topic) > 0;
+  }
+
+  void printTo(Stream& s) const {
+    s.printf("WiFi: %s\n", wifi1_ssid);
+    if (strlen(wifi2_ssid)) s.printf("WiFi2: %s\n", wifi2_ssid);
+    s.printf("TZ: %s\n", tz);
+    if (isRegistered()) {
+      s.printf("MQTT: %s@%s:%u topic=%s\n",
+        mqtt_user, mqtt_host, mqtt_port, mqtt_topic);
+    } else if (hasPendingCode()) {
+      s.printf("Pending code: %s\n", reg_code);
     } else {
-        
-        for( uint8_t i = 0; i < MAX_RELAYS/* relay_count */; i++){
-          if ( ! relays[i].isValid() ) continue;
-          if ( strlen( relays[i].mqtt_code ) == 6 ){
-              out += p.printf( "Try reg code %s on %s:%u\n", relays[0].mqtt_code, mqtt_host, mqtt_port);
-          }
-        }
+      s.println("Not registered, no code");
     }
-    out += p.printf("TLS: %s\n", tls_secure ? "secure" : "insecure");
-    out += p.printf("Relays %u\n", relayCount() );
-    return out;
+    s.printf("TLS: %s | Relays: %u\n",
+      tls_secure ? "secure" : "insecure", relayCount());
+    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+      if (!relays[i].isValid()) continue;
+      s.printf("  [%u] pin=%u %s\n", i, relays[i].pin, relays[i].name);
+    }
   }
 };
 
-// ── Режимы работы устройства ──────────────────────────────────
 enum DeviceState {
-  STATE_PORTAL,       // CaptivePortal активен
-  STATE_CONNECTING,   // Подключение WiFi/NTP
-  STATE_RUNNING,      // Нормальная работа
-  STATE_ERROR         // Ошибка подключения
+  STATE_PORTAL,
+  STATE_CONNECTING,
+  STATE_RUNNING,
+  STATE_ERROR
 };

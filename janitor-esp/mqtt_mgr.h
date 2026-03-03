@@ -20,353 +20,294 @@
 
 class MqttManager {
 public:
+
   bool begin(DeviceConfig& cfg) {
     _instance = this;
     _cfg = &cfg;
-
-    // Настраиваем WiFi клиент
-    if (cfg.tls_secure && Storage.hasCert()) {
-      Serial.println(F("[MQTT] TLS mode: secure (CA cert)"));
-      uint8_t* certBuf;
-      size_t   certLen;
-      if (Storage.loadCert(&certBuf, &certLen)) {
-        #ifdef ESP32
-          _secureClient.setCACert((const char*)certBuf);
-        #else
-          _x509.append(certBuf, certLen);
-          _secureClient.setTrustAnchors(&_x509);
-        #endif
-        delete[] certBuf;
-      }
-      _mqtt.setClient(_secureClient);
-    } else {
-      Serial.println(F("[MQTT] TLS mode: insecure"));
-      _insecureClient.setInsecure();
-      _mqtt.setClient(_insecureClient);
-    }
-
+    _setupClient();
     _mqtt.setServer(cfg.mqtt_host, cfg.mqtt_port);
-    _mqtt.setCallback([](char* topic, byte* payload, unsigned int len) {
-      if ( _instance) _instance->_onMessage(topic, payload, len);
+    _mqtt.setCallback([](char* t, byte* p, unsigned int l) {
+      if (_instance) _instance->_onMessage(t, p, l);
     });
     _mqtt.setKeepAlive(60);
     _mqtt.setSocketTimeout(10);
-
     return true;
   }
 
-  // Регистрация реле — обновлённая версия
-  bool registerRelay(uint8_t relayIndex) {
-    if ( ! _cfg->relays[ relayIndex].isValid() ) return false;
+  // ── Регистрация УСТРОЙСТВА одним запросом ─────────────────
+  // Отправляет: mac, код привязки, список всех реле с пинами.
+  // Получает:   mqtt_host, mqtt_port, mqtt_user, mqtt_pass, mqtt_topic.
+  // Все реле устройства получают ОДИН общий топик.
+  bool registerDevice() {
+    if (!cfg()->hasPendingCode()) {
+      Serial.println(F("[REG] No pending code"));
+      return false;
+    }
 
-    //if (relayIndex >= _cfg->relay_count ) return false;
-    const char* code = _cfg->relays[relayIndex].mqtt_code;
-    if (strlen(code) != 6) return false;
+    // Собираем список реле
+    JsonDocument req;
+    req["mac"]        = WiFi.macAddress();
+    req["fw_version"] = FW_VERSION;
+    req["code"]       = cfg()->reg_code;
+    JsonArray relays  = req.createNestedArray("relays");
+    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+      if (!cfg()->relays[i].isValid()) continue;
+      JsonObject r = relays.createNestedObject();
+      r["index"] = i;
+      r["pin"]   = cfg()->relays[i].pin;
+      r["name"]  = cfg()->relays[i].name;
+    }
 
-    Serial.printf("[REG] Registering relay %d with code %s\n", relayIndex, code);
+    String body; serializeJson(req, body);
+    Serial.printf("[REG] POST %s\n%s\n",
+      (String("https://") + SERVER_HOST + ":" + SERVER_PORT + API_REGISTER).c_str(),
+      body.c_str());
 
     WiFiClientSecure httpClient;
     httpClient.setInsecure();
-
     HTTPClient http;
-    String url = String("https://") + SERVER_HOST + ":" + SERVER_PORT + API_REGISTER;
+    String url = String(F("https://")) + SERVER_HOST + ":" + SERVER_PORT + API_REGISTER;
     http.begin(httpClient, url);
     http.addHeader("Content-Type", "application/json");
 
-    JsonDocument req;
-    req["code"]        = code;
-    req["mac"]         = WiFi.macAddress();
-    req["relay_index"] = relayIndex;
-    req["fw_version"]  = FW_VERSION;
-    String body;
-    serializeJson(req, body);
+    int code = http.POST(body);
+    String resp = http.getString();
+    http.end();
 
-    int httpCode = http.POST(body);
-    if (httpCode != 200) {
-      Serial.printf("[REG] HTTP error: %d\n", httpCode);
-      http.end();
+    if (code != 200) {
+      Serial.printf("[REG] HTTP error: %d\n%s\n", code, resp.c_str());
       return false;
     }
 
     JsonDocument doc;
-    
-    if (deserializeJson(doc, http.getString()) != DeserializationError::Ok) {
-      http.end();
+    if (deserializeJson(doc, resp) != DeserializationError::Ok) {
+      Serial.println(F("[REG] Response JSON error"));
       return false;
     }
-    http.end();
 
-    // Сохраняем MQTT credentials (общие для всего устройства)
-    strlcpy(_cfg->mqtt_user, doc["mqtt_user"] | "", sizeof(_cfg->mqtt_user));
-    strlcpy(_cfg->mqtt_pass, doc["mqtt_pass"] | "", sizeof(_cfg->mqtt_pass));
-    _cfg->registered = true;
+    // Сохраняем всё что пришло с сервера
+    const char* host  = doc["mqtt_host"] | "";
+    const char* topic = doc["mqtt_topic"] | "";
 
-    // Сохраняем топики для каждого реле из ответа
-    JsonArray relays = doc["relays"].as<JsonArray>();
-    for (JsonObject r : relays) {
-      uint8_t idx = r["relay_index"] | 0;
-      if (idx < MAX_RELAYS) {
-        // Сохраняем топик в имени реле через разделитель |
-        String name = _cfg->relays[idx].name;
-        int sep = name.indexOf('|');
-        if (sep >= 0) name = name.substring(0, sep);
-        name += "|";
-        name += (const char*)(r["mqtt_topic"] | "");
-        strlcpy(_cfg->relays[idx].name, name.c_str(), sizeof(_cfg->relays[idx].name));
-      }
+    if (!strlen(host) || !strlen(topic)) {
+      Serial.println(F("[REG] Response missing mqtt_host or mqtt_topic"));
+      return false;
     }
 
-    // Очищаем использованный код
-    memset(_cfg->relays[relayIndex].mqtt_code, 0, sizeof(_cfg->relays[relayIndex].mqtt_code));
+    strlcpy(cfg()->mqtt_host,  host,                    sizeof(cfg()->mqtt_host));
+    cfg()->mqtt_port = doc["mqtt_port"] | MQTT_PORT_TLS;
+    strlcpy(cfg()->mqtt_user,  doc["mqtt_user"] | "",   sizeof(cfg()->mqtt_user));
+    strlcpy(cfg()->mqtt_pass,  doc["mqtt_pass"] | "",   sizeof(cfg()->mqtt_pass));
+    strlcpy(cfg()->mqtt_topic, topic,                   sizeof(cfg()->mqtt_topic));
+    cfg()->registered = true;
 
-    Serial.printf("[REG] Done! MQTT user: %s\n", _cfg->mqtt_user);
+    // Очищаем код привязки
+    memset(cfg()->reg_code, 0, sizeof(cfg()->reg_code));
+
+    // Обновляем MQTT клиент с новым сервером
+    _mqtt.setServer(cfg()->mqtt_host, cfg()->mqtt_port);
+    _setupClient();
+
+    Serial.printf("[REG] OK — MQTT: %s@%s:%u topic=%s\n",
+      cfg()->mqtt_user, cfg()->mqtt_host, cfg()->mqtt_port, cfg()->mqtt_topic);
     return true;
   }
 
-  // Подключиться к MQTT брокеру
+  // ── Подключение к брокеру ─────────────────────────────────
   bool connect() {
-    if (!strlen(_cfg->mqtt_user)) {
-      Serial.println(F("[MQTT] No credentials, skip connect"));
+    if (!cfg()->isRegistered()) {
+      Serial.println(F("[MQTT] Not registered, skip connect"));
       return false;
     }
 
-    Led.setMode( LedManager::CONNECTING );
+    Led.setMode(LedManager::CONNECTING);
 
-    // Формируем client ID из MAC
     String mac = WiFi.macAddress();
     mac.replace(":", "");
     String clientId = String(DEVICE_PREFIX) + "_" + mac;
 
-    // LWT сообщение
-    String lwtTopic = String("sys/devices/") + mac + "/status";
+    // LWT — брокер опубликует при разрыве соединения
+    char lwtTopic[64];
+    snprintf(lwtTopic, sizeof(lwtTopic), SYS_STATUS_TMPL, mac.c_str());
 
-    Serial.printf("[MQTT] Connecting as %s...\n", clientId.c_str());
+    Serial.printf("[MQTT] Connecting as %s to %s:%u...\n",
+      clientId.c_str(), cfg()->mqtt_host, cfg()->mqtt_port);
 
     bool ok = _mqtt.connect(
       clientId.c_str(),
-      _cfg->mqtt_user,
-      _cfg->mqtt_pass,
-      lwtTopic.c_str(),
-      1, true,
+      cfg()->mqtt_user,
+      cfg()->mqtt_pass,
+      lwtTopic, 1, true,
       "{\"online\":false}"
     );
 
     if (!ok) {
-      Serial.printf("[MQTT] Failed, state: %d\n", _mqtt.state());
-      Led.setMode( LedManager::ERROR);
+      Serial.printf("[MQTT] Failed, state=%d\n", _mqtt.state());
+      Led.setMode(LedManager::ERROR);
       return false;
     }
 
     Serial.println(F("[MQTT] Connected!"));
-    Led.setMode( LedManager::RUNNING);
+    Led.setMode(LedManager::RUNNING);
 
-    // Публикуем онлайн статус
+    // Публикуем online
     _publishOnline(mac);
 
-    // Подписываемся на топики команд для каждого реле
-    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+    // Подписываемся на команды — один топик для всего устройства
+    char cmdTopic[128];
+    snprintf(cmdTopic, sizeof(cmdTopic), RELAY_CMD_TMPL, cfg()->mqtt_topic);
+    _mqtt.subscribe(cmdTopic, 1);
+    Serial.printf("[MQTT] Subscribed: %s\n", cmdTopic);
 
-      if ( ! _cfg->relays[i].isValid() ) continue;
-      // Топик: relay/{groupTopic}/trigger
-      // groupTopic берём из конфига (заполняется при регистрации)
-      String topic = _getGroupTopic(i);
-      if ( topic.isEmpty() ) {
-        Serial.printf("[MQTT] Skip unregistred %s\n", _cfg->relays[i].name ); 
-        continue;
-      }
-      // String uri = String("relay/") + topic + "/trigger";
-      // _mqtt.subscribe(uri.c_str(), 1);
-      // Serial.printf("[MQTT] Subscribed: %s\n", uri.c_str());
-     
-      char uri[128];
-      snprintf(uri, sizeof(uri), relayTriggerTmpl, topic.c_str());
-      _mqtt.subscribe(uri, 1);
-
-      Serial.printf("[MQTT] Subscribed: %s\n", uri);
-    }
-
-    _lastHeartbeat = millis();
     return true;
   }
 
-  // Вызывать в loop()
-void tick() {
+  // ── loop() ────────────────────────────────────────────────
+  void tick() {
     if (!_mqtt.connected()) {
       unsigned long now = millis();
-      if (now - _lastReconnect > MQTT_RECONNECT_MS) {
-        _lastReconnect = now;
+      if (now - _lastReconnect < MQTT_RECONNECT_MS) return;
+      _lastReconnect = now;
 
-        if (_mqtt.state() == 5) {
-          _authFailCount++;
-          Serial.printf("[MQTT] Auth failed (%d/3)\n", _authFailCount);
-          if (_authFailCount >= 3) {
-            // Credentials устарели — перерегистрируемся по новому коду
-            // Код должен быть введён через портал заранее
-            Serial.println(F("[MQTT] Trying re-register with saved code..."));
-            bool reregistered = false;
-            for (uint8_t i = 0; i < MAX_RELAYS; i++) {
-              if ( ! _cfg->relays[i].isValid() ) continue;
-
-              if (strlen(_cfg->relays[i].mqtt_code) == 6) {
-                if (registerRelay(i)) {
-
-                  Storage.saveConfig(*_cfg);
-                  reregistered = true;
-                }
-              }
-            }
-            if (reregistered) {
-              _authFailCount = 0;
-              connect();
-              return;
-            }
+      if (_mqtt.state() == MQTT_CONNECT_BAD_CREDENTIALS) {
+        _authFails++;
+        Serial.printf("[MQTT] Auth failed (%u/3)\n", _authFails);
+        if (_authFails >= 3 && cfg()->hasPendingCode()) {
+          Serial.println(F("[MQTT] Trying re-register..."));
+          if (registerDevice()) {
+            Storage.saveMainConfig(*_cfg);
+            _authFails = 0;
           }
         }
-
-        Serial.println(F("[MQTT] Reconnecting..."));
-        Led.setMode( LedManager::CONNECTING );
-        if (connect()) {
-          _authFailCount = 0;
-          Led.setMode( LedManager::RUNNING);
-        } else {
-          Led.setMode( LedManager::ERROR);
-        }
       }
+
+      Serial.println(F("[MQTT] Reconnecting..."));
+      Led.setMode(LedManager::CONNECTING);
+      if (connect()) _authFails = 0;
+      else Led.setMode(LedManager::ERROR);
       return;
     }
 
-    _authFailCount = 0;
+    _authFails = 0;
     _mqtt.loop();
-
-    unsigned long now = millis();
-    if (now - _lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
-      _lastHeartbeat = now;
-      _publishHeartbeat();
-    }
   }
 
-  bool isConnected() { return _mqtt.connected(); }
+  bool isConnected()  { return _mqtt.connected(); }
 
-  // Публикация статуса реле
-  void publishRelayStatus(uint8_t relayIndex, bool state) {
-    if (!isConnected()) return;
+  // ── Публикация статуса ВСЕХ реле ─────────────────────────
+  // Один retained payload в общий топик устройства.
+  // Формат: { "relays": [ {index, state} ... ], "ts": unix }
+  void publishAllStatuses() {
+    if (!isConnected() || !cfg()->isRegistered()) return;
 
-    static constexpr const char tmpl[] PROGMEM = "relay/%s/status";
+    JsonDocument doc;
+    JsonArray arr = doc.createNestedArray("relays");
+    for (uint8_t i = 0; i < Relays.getCount(); i++) {
+      JsonObject r = arr.createNestedObject();
+      r["index"] = Relays.getCfgIndex(i);
+      r["state"] = Relays.getState(i) ? "on" : "off";
+    }
+    doc["ts"] = (uint32_t)time(nullptr);
+
     char topic[128];
-    snprintf(topic, sizeof(topic), tmpl, _getGroupTopic(relayIndex).c_str());
-
-    _mqtt.publish(topic, state ? "{\"state\":\"on\"}" : "{\"state\":\"off\"}", true); // retained
-
-    // String topic = String("relay/") + _getGroupTopic(relayIndex) + "/status";
-    // String payload = state ? F("{\"state\":\"on\"}") : F("{\"state\":\"off\"}");
-    // _mqtt.publish(topic.c_str(), payload.c_str(), true); // retained
+    snprintf(topic, sizeof(topic), RELAY_STATUS_TMPL, cfg()->mqtt_topic);
+    String payload; serializeJson(doc, payload);
+    _mqtt.publish(topic, payload.c_str(), true);
+    Serial.printf("[MQTT] → %s: %s\n", topic, payload.c_str());
   }
 
 private:
-  DeviceConfig*     _cfg;
-  WiFiClientSecure  _secureClient;
-  WiFiClientSecure  _insecureClient;
-  PubSubClient      _mqtt;
-  unsigned long     _lastReconnect  = 0;
-  unsigned long     _lastHeartbeat  = 0;
+  DeviceConfig*    _cfg      = nullptr;
+  WiFiClientSecure _secureClient;
+  WiFiClientSecure _insecureClient;
+  PubSubClient     _mqtt;
+  unsigned long    _lastReconnect = 0;
+  uint8_t          _authFails     = 0;
   static MqttManager* _instance;
-
-  static constexpr const char relayTriggerTmpl[] PROGMEM = "relay/%s/trigger";
-  static constexpr const char sysDevicesTmpl[] PROGMEM = "sys/devices/%s/%s";
- 
-  //String topic = String(F("sys/devices/")) + mac + "/status";
 
   #ifndef ESP32
   X509List _x509;
   #endif
 
-  uint8_t _authFailCount = 0;
-  bool    _reregistering = false;
-  
-  // Получить MQTT топик группы для реле
-  // Топик хранится в имени реле после регистрации
-  // Формат имени после регистрации: "name|topic"
-  String _getGroupTopic(uint8_t index) {
-    String name = _cfg->relays[index].name;
-    int sep = name.indexOf('|');
-    if (sep >= 0) return name.substring(sep + 1);
-    return ""; // fallback
-  }
+  DeviceConfig* cfg() { return _cfg; }
 
-  void _onMessage(char* topic, byte* payload, unsigned int len) {
-    String topicStr = topic;
-    String msg;
-    for (unsigned int i = 0; i < len; i++) msg += (char)payload[i];
-
-    Serial.printf("[MQTT] Message: %s = %s\n", topic, msg.c_str());
-
-    // Парсим команду
-    JsonDocument doc;
-    if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
-
-    const char* action   = doc["action"] | "";
-    uint32_t    duration = doc["duration"] | 0;
-
-    // Находим нужное реле по топику
-    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
-      if ( ! _cfg->relays[i].isValid() ) continue;
-
-      //String expected = String("relay/") + _getGroupTopic(i) + "/trigger";
-      char expected[128];
-      snprintf(expected, sizeof(expected), relayTriggerTmpl, _getGroupTopic(i).c_str());
-
-      if ( ! topicStr.equals( expected)) continue;
-
-      if (strcmp(action, "pulse") == 0 && duration > 0) {
-        // Импульсный режим
-        Serial.printf("[RELAY] Pulse relay %d for %dms\n", i, duration);
-        Relays.pulse(i, duration);
-        publishRelayStatus(i, true);
-        // Статус OFF опубликуем когда реле выключится (в главном loop)
-      } else if (strcmp(action, "on") == 0) {
-        // Триггер ВКЛ
-        Serial.printf("[RELAY] ON relay %d\n", i);
-        Relays.setState(i, true);
-        publishRelayStatus(i, true);
-      } else if (strcmp(action, "off") == 0) {
-        // Триггер ВЫКЛ
-        Serial.printf("[RELAY] OFF relay %d\n", i);
-        Relays.setState(i, false);
-        publishRelayStatus(i, false);
+  void _setupClient() {
+    if (_cfg && _cfg->tls_secure && Storage.hasCert()) {
+      Serial.println(F("[MQTT] TLS: secure"));
+      uint8_t* buf; size_t len;
+      if (Storage.loadCert(&buf, &len)) {
+        #ifdef ESP32
+          _secureClient.setCACert((const char*)buf);
+        #else
+          _x509.append(buf, len);
+          _secureClient.setTrustAnchors(&_x509);
+        #endif
+        delete[] buf;
       }
-      break;
+      _mqtt.setClient(_secureClient);
+    } else {
+      Serial.println(F("[MQTT] TLS: insecure"));
+      _insecureClient.setInsecure();
+      _mqtt.setClient(_insecureClient);
     }
   }
 
-  void _publishOnline(const String& mac) {
-    //String topic = String(F("sys/devices/")) + mac + "/status";
-    char topic[128];
-    snprintf( topic, sizeof(topic), sysDevicesTmpl, mac.c_str(), "status");
+  // Входящее MQTT сообщение — команда реле
+  // Формат: { "action": "pulse"|"on"|"off", "relay": 0, "duration": 500 }
+  // relay — индекс реле (из cfg), если не указан — первое реле
+  void _onMessage(char* topic, byte* payload, unsigned int len) {
+    String msg;
+    msg.reserve(len);
+    for (unsigned int i = 0; i < len; i++) msg += (char)payload[i];
+    Serial.printf("[MQTT] ← %s: %s\n", topic, msg.c_str());
 
+    JsonDocument doc;
+    if (deserializeJson(doc, msg) != DeserializationError::Ok) {
+      Serial.println(F("[MQTT] JSON error"));
+      return;
+    }
+
+    const char* action   = doc["action"]   | "";
+    uint32_t    duration = doc["duration"] | 0;
+    int8_t      cfgIdx   = doc["relay"]    | 0;   // индекс реле в cfg.relays[]
+
+    // Найти реле в RelayManager по cfg index
+    int8_t relayIdx = Relays.findByCfgIndex((uint8_t)cfgIdx);
+    if (relayIdx < 0) {
+      Serial.printf("[MQTT] Relay cfg[%d] not found\n", cfgIdx);
+      return;
+    }
+
+    if (strcmp(action, "pulse") == 0 && duration > 0) {
+      Serial.printf("[CMD] pulse relay[%d] %ums\n", cfgIdx, duration);
+      Relays.pulse((uint8_t)relayIdx, duration);
+    } else if (strcmp(action, "on") == 0) {
+      Serial.printf("[CMD] on relay[%d]\n", cfgIdx);
+      Relays.setState((uint8_t)relayIdx, true);
+    } else if (strcmp(action, "off") == 0) {
+      Serial.printf("[CMD] off relay[%d]\n", cfgIdx);
+      Relays.setState((uint8_t)relayIdx, false);
+    } else {
+      Serial.printf("[CMD] unknown action: %s\n", action);
+      return;
+    }
+
+    publishAllStatuses();
+  }
+
+  void _publishOnline(const String& mac) {
+    char topic[64];
+    snprintf(topic, sizeof(topic), SYS_STATUS_TMPL, mac.c_str());
     JsonDocument doc;
     doc["online"]     = true;
     doc["fw_version"] = FW_VERSION;
     doc["mac"]        = WiFi.macAddress();
     doc["ip"]         = WiFi.localIP().toString();
-    String payload; payload.reserve(128);
-    serializeJson(doc, payload);
+    doc["relays"]     = (int)Relays.getCount();
+    doc["topic"]      = cfg()->mqtt_topic;
+    String payload; serializeJson(doc, payload);
     _mqtt.publish(topic, payload.c_str(), true);
-  }
-
-  void _publishHeartbeat() {
-    String mac = WiFi.macAddress();
-    mac.replace(":", "");
-    //String topic = String(F("sys/devices/")) + mac + "/heartbeat";
-    char topic[128];
-    snprintf( topic, sizeof(topic), sysDevicesTmpl, mac.c_str(), "heartbeat");
-
-    JsonDocument doc;
-    doc["ts"]   = time(nullptr); // millis();
-    doc["heap"] = ESP.getFreeHeap();
-    String payload; payload.reserve(64);
-    serializeJson(doc, payload);
-    _mqtt.publish(topic, payload.c_str());
-    Serial.printf("[Heartbeat] %s = %s\n", topic, payload.c_str());
+    Serial.printf("[MQTT] Online → %s\n", topic);
   }
 };
 

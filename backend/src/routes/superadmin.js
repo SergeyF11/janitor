@@ -199,7 +199,7 @@ async function superadminRoutes(app) {
                SELECT json_agg(json_build_object(
                  'device_id', d.device_id,
                  'last_seen', d.last_seen,
-                 'is_online', d.last_seen > NOW() - INTERVAL '2 minutes',
+                 'is_online', d.is_online,
                  'relay_index', dg.relay_index
                ))
                FROM device_groups dg
@@ -469,7 +469,7 @@ async function superadminRoutes(app) {
     const db = getDb()
     return db`
       SELECT d.device_id, d.mqtt_user, d.fw_version, d.last_seen, d.registered_at,
-             CASE WHEN d.last_seen > NOW() - INTERVAL '2 minutes' THEN true ELSE false END as is_online,
+             d.is_online,
              json_agg(json_build_object('group_id', g.id, 'name', g.name, 'relay_index', dg.relay_index)) as groups
       FROM devices d
       LEFT JOIN device_groups dg ON dg.device_id = d.device_id
@@ -483,8 +483,40 @@ async function superadminRoutes(app) {
   app.delete('/sa/devices/:deviceId', {
     onRequest: [authenticate, isSuperAdmin]
   }, async (req, reply) => {
-    const db = getDb()
-    await db`DELETE FROM devices WHERE device_id = ${req.params.deviceId}`
+    const db       = getDb()
+    const deviceId = req.params.deviceId.replace(/[:\-]/g, '').toUpperCase()
+
+    // Получить mqtt_user перед удалением
+    const [device] = await db`
+      SELECT mqtt_user FROM devices WHERE device_id = ${deviceId}
+    `
+
+    await db`DELETE FROM devices WHERE device_id = ${deviceId}`
+
+    // Удалить из dynsec
+    if (device?.mqtt_user) {
+      try {
+        const { execSync } = require('child_process')
+        const host  = process.env.MQTT_HOST     || 'janitor-mosquitto'
+        const port  = process.env.MQTT_PORT     || '1883'
+        const user  = process.env.MQTT_USER     || 'mqttadmin'
+        const pass  = process.env.MQTT_PASSWORD || ''
+        const base  = `mosquitto_ctrl -h ${host} -p ${port} -u ${user} -P "${pass}" dynsec`
+        const role  = `role_${deviceId}`
+        try { execSync(`${base} deleteClient ${device.mqtt_user}`, { stdio: 'pipe' }) } catch {}
+        try { execSync(`${base} deleteRole ${role}`,               { stdio: 'pipe' }) } catch {}
+        console.log(`[dynsec] Deleted user=${device.mqtt_user} role=${role}`)
+      } catch (err) {
+        console.error('[dynsec] delete error:', err.message)
+      }
+    }
+
+    await db`
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'device_deleted', 'device', ${deviceId},
+              ${JSON.stringify({ mqtt_user: device?.mqtt_user })})
+    `
+
     return { ok: true }
   })
 
@@ -542,7 +574,7 @@ async function superadminRoutes(app) {
         (SELECT COUNT(*) FROM groups)                         as total_groups,
         (SELECT COUNT(*) FROM devices)                        as total_devices,
         (SELECT COUNT(*) FROM devices
-         WHERE last_seen > NOW() - INTERVAL '2 minutes')      as online_devices,
+         WHERE is_online = true)      as online_devices,
         (SELECT COUNT(*) FROM refresh_tokens
          WHERE expires_at > NOW())                            as active_sessions,
         (SELECT COUNT(*) FROM event_log

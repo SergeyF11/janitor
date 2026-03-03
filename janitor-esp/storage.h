@@ -11,12 +11,8 @@
   #include <ESP8266WiFi.h>
 #endif
 
-// ── Простое XOR шифрование с ключом на основе MAC ─────────────
-// AES требует сторонней библиотеки, используем XOR+key stretching
-// Достаточно для защиты от чтения с флеш-памяти
 class Crypto {
 public:
-  // Инициализация ключа из MAC адреса
   static void begin() {
     uint8_t mac[6];
     #ifdef ESP32
@@ -24,140 +20,140 @@ public:
     #else
       WiFi.macAddress(mac);
     #endif
-    // Генерируем 32-байтный ключ из MAC + соли
-    for (int i = 0; i < 32; i++) {
-      _key[i] = mac[i % 6] ^ CRYPTO_SALT[i % 16] ^ (i * 7);
-    }
+    for (int i = 0; i < 32; i++)
+      _key[i] = mac[i % 6] ^ CRYPTO_SALT[i % 16] ^ (uint8_t)(i * 7);
   }
 
-  // Шифрование/дешифрование (XOR симметричен)
   static String encrypt(const String& data) {
-    String result = data;
-    for (size_t i = 0; i < result.length(); i++) {
-      result[i] ^= _key[i % 32];
-    }
-    return _toBase64(result);
+    String r = data;
+    for (size_t i = 0; i < r.length(); i++) r[i] ^= _key[i % 32];
+    return _toBase64(r);
   }
 
   static String decrypt(const String& data) {
-    String decoded = _fromBase64(data);
-    for (size_t i = 0; i < decoded.length(); i++) {
-      decoded[i] ^= _key[i % 32];
-    }
-    return decoded;
+    String r = _fromBase64(data);
+    for (size_t i = 0; i < r.length(); i++) r[i] ^= _key[i % 32];
+    return r;
   }
 
 private:
   static uint8_t _key[32];
 
-  static String _toBase64(const String& input) {
-    const char* b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  static String _toBase64(const String& in) {
+    static const char* b64 =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     String out;
-    int i = 0;
-    uint8_t buf[3];
-    size_t len = input.length();
-    for (size_t pos = 0; pos < len; pos += 3) {
-      buf[0] = input[pos];
-      buf[1] = (pos+1 < len) ? input[pos+1] : 0;
-      buf[2] = (pos+2 < len) ? input[pos+2] : 0;
-      out += b64[buf[0] >> 2];
-      out += b64[((buf[0] & 3) << 4) | (buf[1] >> 4)];
-      out += (pos+1 < len) ? b64[((buf[1] & 0xf) << 2) | (buf[2] >> 6)] : '=';
-      out += (pos+2 < len) ? b64[buf[2] & 0x3f] : '=';
+    size_t len = in.length();
+    for (size_t p = 0; p < len; p += 3) {
+      uint8_t b0 = in[p], b1 = p+1<len ? in[p+1] : 0, b2 = p+2<len ? in[p+2] : 0;
+      out += b64[b0 >> 2];
+      out += b64[((b0&3)<<4)|(b1>>4)];
+      out += p+1<len ? b64[((b1&0xf)<<2)|(b2>>6)] : '=';
+      out += p+2<len ? b64[b2&0x3f] : '=';
     }
     return out;
   }
 
-  static String _fromBase64(const String& input) {
-    const String b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  static String _fromBase64(const String& in) {
+    static const String b64 =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     String out;
-    size_t len = input.length();
-    for (size_t pos = 0; pos < len; pos += 4) {
+    size_t len = in.length();
+    for (size_t p = 0; p < len; p += 4) {
       uint8_t b[4];
-      for (int i = 0; i < 4; i++) {
-        b[i] = (input[pos+i] == '=') ? 0 : b64.indexOf(input[pos+i]);
-      }
-      out += (char)((b[0] << 2) | (b[1] >> 4));
-      if (input[pos+2] != '=') out += (char)(((b[1] & 0xf) << 4) | (b[2] >> 2));
-      if (input[pos+3] != '=') out += (char)(((b[2] & 3) << 6) | b[3]);
+      for (int i = 0; i < 4; i++)
+        b[i] = in[p+i]=='=' ? 0 : (uint8_t)b64.indexOf(in[p+i]);
+      out += (char)((b[0]<<2)|(b[1]>>4));
+      if (in[p+2]!='=') out += (char)(((b[1]&0xf)<<4)|(b[2]>>2));
+      if (in[p+3]!='=') out += (char)(((b[2]&3)<<6)|b[3]);
     }
     return out;
   }
 };
 
-// ── Менеджер хранилища ────────────────────────────────────────
 class StorageManager {
 public:
   bool begin() {
     if (!LittleFS.begin()) {
-      Serial.println(F("[FS] LittleFS mount failed, formatting..."));
       LittleFS.format();
-      if (!LittleFS.begin()) {
-        Serial.println(F("[FS] Fatal: cannot mount LittleFS"));
-        return false;
-      }
+      if (!LittleFS.begin()) { Serial.println(F("[FS] Fatal")); return false; }
     }
-    Serial.println(F("[FS] LittleFS mounted"));
+    Serial.println(F("[FS] Mounted"));
     return true;
   }
 
-  // Загрузить конфиг из файла
+  // Полная загрузка (main + relay)
   bool loadConfig(DeviceConfig& cfg) {
-    if (!LittleFS.exists(CONFIG_FILE)) {
-      Serial.println(F("[FS] No config file, using defaults"));
-      _setDefaults(cfg);
-      return false;
-    }
+    _setDefaults(cfg);
+    loadMainConfig(cfg);
+    loadRelayConfig(cfg);
+    return true;
+  }
 
+  // Полное сохранение
+  bool saveConfig(const DeviceConfig& cfg) {
+    return saveMainConfig(cfg) && saveRelayConfig(cfg);
+  }
+
+  // ── Основной конфиг: WiFi + MQTT + код привязки ───────────
+  bool loadMainConfig(DeviceConfig& cfg) {
+    if (!LittleFS.exists(CONFIG_FILE)) return false;
     File f = LittleFS.open(CONFIG_FILE, "r");
     if (!f) return false;
-
-    String encrypted = f.readString();
+    String json = Crypto::decrypt(f.readString());
     f.close();
-
-    String json = Crypto::decrypt(encrypted);
-    Serial.println(F("[FS] Config loaded"));
-    Serial.println( json );
-
-    return _parseJson(json, cfg);
+    return _parseMain(json, cfg);
   }
 
-  // Сохранить конфиг в файл
-  bool saveConfig(const DeviceConfig& cfg) {
-    String json = _toJson(cfg);
-    String encrypted = Crypto::encrypt(json);
-
+  bool saveMainConfig(const DeviceConfig& cfg) {
     File f = LittleFS.open(CONFIG_FILE, "w");
     if (!f) return false;
-    f.print(encrypted);
+    f.print(Crypto::encrypt(_serializeMain(cfg)));
     f.close();
-
-    Serial.println(F("[FS] Config saved"));
+    Serial.println(F("[FS] Main saved"));
     return true;
   }
 
-  // Сбросить конфиг (удалить файл)
-  void resetConfig() {
-    LittleFS.remove(CONFIG_FILE);
-    Serial.println(F("[FS] Config reset"));
-  }
-
-  // Проверить наличие сертификата
-  bool hasCert() {
-    return LittleFS.exists(CERT_FILE);
-  }
-
-  // Сохранить сертификат (DER формат)
-  bool saveCert(const uint8_t* data, size_t len) {
-    File f = LittleFS.open(CERT_FILE, "w");
+  // ── Конфиг реле: пины, имена ─────────────────────────────
+  bool loadRelayConfig(DeviceConfig& cfg) {
+    if (!LittleFS.exists(RELAY_FILE)) return false;
+    File f = LittleFS.open(RELAY_FILE, "r");
     if (!f) return false;
-    f.write(data, len);
+    String json = Crypto::decrypt(f.readString());
     f.close();
-    Serial.printf("[FS] Certificate saved (%d bytes)\n", len);
+    return _parseRelay(json, cfg);
+  }
+
+  bool saveRelayConfig(const DeviceConfig& cfg) {
+    File f = LittleFS.open(RELAY_FILE, "w");
+    if (!f) return false;
+    f.print(Crypto::encrypt(_serializeRelay(cfg)));
+    f.close();
+    Serial.println(F("[FS] Relay saved"));
     return true;
   }
 
-  // Загрузить сертификат в X509List
+  // ── Сброс ─────────────────────────────────────────────────
+  void resetAll() {
+    LittleFS.remove(CONFIG_FILE);
+    LittleFS.remove(RELAY_FILE);
+    Serial.println(F("[FS] All reset"));
+  }
+
+  void resetRegistration(DeviceConfig& cfg) {
+    cfg.registered = false;
+    memset(cfg.mqtt_host,  0, sizeof(cfg.mqtt_host));
+    memset(cfg.mqtt_user,  0, sizeof(cfg.mqtt_user));
+    memset(cfg.mqtt_pass,  0, sizeof(cfg.mqtt_pass));
+    memset(cfg.mqtt_topic, 0, sizeof(cfg.mqtt_topic));
+    memset(cfg.reg_code,   0, sizeof(cfg.reg_code));
+    saveMainConfig(cfg);
+    Serial.println(F("[FS] Registration reset"));
+  }
+
+  // ── Сертификат ────────────────────────────────────────────
+  bool hasCert() { return LittleFS.exists(CERT_FILE); }
+
   bool loadCert(uint8_t** buf, size_t* len) {
     if (!hasCert()) return false;
     File f = LittleFS.open(CERT_FILE, "r");
@@ -172,55 +168,36 @@ public:
 private:
   void _setDefaults(DeviceConfig& cfg) {
     memset(&cfg, 0, sizeof(cfg));
-    strlcpy(cfg.mqtt_host, SERVER_HOST, sizeof(cfg.mqtt_host));
     cfg.mqtt_port  = MQTT_PORT_TLS;
     cfg.tls_secure = false;
     cfg.registered = false;
-    //cfg.relay_count = 1;
-    cfg.relays[0].pin = 5;
+    cfg.relays[0].pin        = 5;
     cfg.relays[0].active_low = true;
     strlcpy(cfg.relays[0].name, "Relay 1", sizeof(cfg.relays[0].name));
+    for (uint8_t i = 1; i < MAX_RELAYS; i++)
+      cfg.relays[i].pin = (uint8_t)NOT_A_PIN;
   }
 
-  bool _parseJson(const String& json, DeviceConfig& cfg) {
+  bool _parseMain(const String& json, DeviceConfig& cfg) {
     JsonDocument doc;
-    if (deserializeJson(doc, json) != DeserializationError::Ok) {
-      Serial.println(F("[FS] JSON parse error"));
-      _setDefaults(cfg);
-      return false;
-    }
-
-    strlcpy(cfg.wifi1_ssid, doc["w1s"] | "", sizeof(cfg.wifi1_ssid));
-    strlcpy(cfg.wifi1_psk,  doc["w1p"] | "", sizeof(cfg.wifi1_psk));
-    strlcpy(cfg.wifi2_ssid, doc["w2s"] | "", sizeof(cfg.wifi2_ssid));
-    strlcpy(cfg.wifi2_psk,  doc["w2p"] | "", sizeof(cfg.wifi2_psk));
-    strlcpy(cfg.mqtt_host,  doc["mh"]  | SERVER_HOST, sizeof(cfg.mqtt_host));
-    cfg.mqtt_port  = doc["mp"]  | MQTT_PORT_TLS;
-    strlcpy(cfg.mqtt_user,  doc["mu"]  | "", sizeof(cfg.mqtt_user));
-    strlcpy(cfg.mqtt_pass,  doc["mps"] | "", sizeof(cfg.mqtt_pass));
+    if (deserializeJson(doc, json) != DeserializationError::Ok) return false;
+    strlcpy(cfg.wifi1_ssid,  doc["w1s"] | "", sizeof(cfg.wifi1_ssid));
+    strlcpy(cfg.wifi1_psk,   doc["w1p"] | "", sizeof(cfg.wifi1_psk));
+    strlcpy(cfg.wifi2_ssid,  doc["w2s"] | "", sizeof(cfg.wifi2_ssid));
+    strlcpy(cfg.wifi2_psk,   doc["w2p"] | "", sizeof(cfg.wifi2_psk));
+    strlcpy(cfg.mqtt_host,   doc["mh"]  | "", sizeof(cfg.mqtt_host));
+    cfg.mqtt_port = doc["mp"] | MQTT_PORT_TLS;
+    strlcpy(cfg.mqtt_user,   doc["mu"]  | "", sizeof(cfg.mqtt_user));
+    strlcpy(cfg.mqtt_pass,   doc["mps"] | "", sizeof(cfg.mqtt_pass));
+    strlcpy(cfg.mqtt_topic,  doc["mt"]  | "", sizeof(cfg.mqtt_topic));
+    strlcpy(cfg.reg_code,    doc["rc"]  | "", sizeof(cfg.reg_code));
     cfg.registered = doc["reg"] | false;
     cfg.tls_secure = doc["tls"] | false;
-    strlcpy(cfg.tz,  doc["tz"] | "", sizeof(cfg.tz));
-
-    //cfg.relay_count = min((int)(doc["rc"] | 1), MAX_RELAYS);
-    JsonArray relays = doc["rl"].as<JsonArray>();
-
-    //cfg.relay_count = 0; //relays.size();
-    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
-      cfg.relays[i].pin        = relays[i]["p"]  | (uint8_t)NOT_A_PIN;
-
-      bool validRelay = cfg.relays[i].pin != (uint8_t)NOT_A_PIN;
-      //if ( validRelay ) cfg.relay_count++;
-      
-      cfg.relays[i].active_low = relays[i]["al"] | true;
-      strlcpy(cfg.relays[i].name,       relays[i]["n"]  | "Relay", sizeof(cfg.relays[i].name));
-      strlcpy(cfg.relays[i].mqtt_code,  relays[i]["c"]  | "",      sizeof(cfg.relays[i].mqtt_code)); 
-    }
+    strlcpy(cfg.tz, doc["tz"] | "", sizeof(cfg.tz));
     return true;
   }
 
-  String _toJson(const DeviceConfig& cfg) {
-    // cfg.relayCount();
+  String _serializeMain(const DeviceConfig& cfg) {
     JsonDocument doc;
     doc["w1s"] = cfg.wifi1_ssid;
     doc["w1p"] = cfg.wifi1_psk;
@@ -230,29 +207,42 @@ private:
     doc["mp"]  = cfg.mqtt_port;
     doc["mu"]  = cfg.mqtt_user;
     doc["mps"] = cfg.mqtt_pass;
+    doc["mt"]  = cfg.mqtt_topic;
+    doc["rc"]  = cfg.reg_code;
     doc["reg"] = cfg.registered;
     doc["tls"] = cfg.tls_secure;
-    //doc["rc"]  = cfg.relay_count;
-    doc["tz"] = cfg.tz;
+    doc["tz"]  = cfg.tz;
+    String out; serializeJson(doc, out);
+    return out;
+  }
 
-    JsonArray relays = doc.createNestedArray("rl");
-   
-    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
-      if ( ! cfg.relays[i].isValid() ) continue;
-
-      if ( cfg.relays[i].pin != (uint8_t)NOT_A_PIN ){
-        JsonObject r = relays.createNestedObject();
-        r["p"]  = cfg.relays[i].pin;
-        r["al"] = cfg.relays[i].active_low;
-        r["n"]  = cfg.relays[i].name;
-        r["c"]  = cfg.relays[i].mqtt_code;
-      }
+  bool _parseRelay(const String& json, DeviceConfig& cfg) {
+    JsonDocument doc;
+    if (deserializeJson(doc, json) != DeserializationError::Ok) return false;
+    for (uint8_t i = 0; i < MAX_RELAYS; i++)
+      cfg.relays[i].pin = (uint8_t)NOT_A_PIN;
+    for (JsonObject r : doc["rl"].as<JsonArray>()) {
+      uint8_t idx = r["i"] | 255;
+      if (idx >= MAX_RELAYS) continue;
+      cfg.relays[idx].pin        = r["p"]  | (uint8_t)NOT_A_PIN;
+      cfg.relays[idx].active_low = r["al"] | true;
+      strlcpy(cfg.relays[idx].name, r["n"] | "Relay", sizeof(cfg.relays[idx].name));
     }
+    return true;
+  }
 
-    String out;
-    serializeJson(doc, out);
-
-    Serial.println(out);
+  String _serializeRelay(const DeviceConfig& cfg) {
+    JsonDocument doc;
+    JsonArray arr = doc.createNestedArray("rl");
+    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+      if (!cfg.relays[i].isValid()) continue;
+      JsonObject r = arr.createNestedObject();
+      r["i"]  = i;
+      r["p"]  = cfg.relays[i].pin;
+      r["al"] = cfg.relays[i].active_low;
+      r["n"]  = cfg.relays[i].name;
+    }
+    String out; serializeJson(doc, out);
     return out;
   }
 };

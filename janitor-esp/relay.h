@@ -2,80 +2,88 @@
 #include <Arduino.h>
 #include "config.h"
 
-
 class RelayManager {
 public:
   void begin(DeviceConfig& cfg) {
-    //_count = cfg.relayCount(); //relay_count;
     uint8_t j = 0;
     for (uint8_t i = 0; i < MAX_RELAYS; i++) {
-      if ( ! cfg.relays[i].isValid()  ) continue;
-
-      _pins[j]      = cfg.relays[i].pin;
-      //bool validPin = cfg.relays[i].pin != (uint8_t)NOT_A_PIN;
-
-      Serial.printf("[RELAY] Init pin %u", cfg.relays[i].pin );      
-      _activeLow[j] = cfg.relays[i].active_low;
-      _state[j]     = false;
+      if (!cfg.relays[i].isValid()) continue;
+      _pins[j]     = cfg.relays[i].pin;
+      _activeLow[j]= cfg.relays[i].active_low;
+      _cfgIndex[j] = i;   // запоминаем соответствие: relay[j] ↔ cfg.relays[i]
+      _state[j]    = false;
+      _pulsing[j]  = false;
+      _pulseEnd[j] = 0;
       pinMode(_pins[j], OUTPUT);
-      setRelay(j, false);  // выключить при старте
+      _setPin(j, false);
+      Serial.printf("[RELAY] Init: manager[%u] = cfg[%u] pin=%u %s\n",
+        j, i, _pins[j], _activeLow[j] ? "active_low" : "active_high");
       j++;
     }
     _count = j;
   }
 
-  // Импульс (duration мс), затем выключить
-  void pulse(uint8_t index, uint32_t duration) {
-    if (index >= _count) return;
-    setRelay(index, true);
-    _pulseEnd[index] = millis() + duration;
-    _pulsing[index]  = true;
+  // Импульс (duration мс)
+  void pulse(uint8_t idx, uint32_t duration) {
+    if (idx >= _count) return;
+    _setPin(idx, true);
+    _state[idx]   = true;
+    _pulseEnd[idx]= millis() + duration;
+    _pulsing[idx] = true;
   }
 
-  // Переключить состояние (триггерный режим)
-  bool toggle(uint8_t index) {
-    if (index >= _count) return false;
-    _state[index] = !_state[index];
-    setRelay(index, _state[index]);
-    return _state[index];
+  // Установить состояние
+  void setState(uint8_t idx, bool on) {
+    if (idx >= _count) return;
+    _state[idx] = on;
+    _setPin(idx, on);
   }
 
-  // Установить состояние напрямую
-  void setState(uint8_t index, bool on) {
-    if (index >= _count) return;
-    _state[index] = on;
-    setRelay(index, on);
+  bool getState(uint8_t idx) const {
+    return idx < _count ? _state[idx] : false;
   }
 
-  bool getState(uint8_t index) {
-    if (index >= _count) return false;
-    return _state[index];
+  uint8_t getCount() const { return _count; }
+
+  // Получить config index для relay manager index
+  uint8_t getCfgIndex(uint8_t idx) const {
+    return idx < _count ? _cfgIndex[idx] : 255;
   }
 
-  uint8_t getCount() { return _count; }
+  // Найти relay manager index по config index (-1 если не найден)
+  int8_t findByCfgIndex(uint8_t cfgIdx) const {
+    for (uint8_t i = 0; i < _count; i++)
+      if (_cfgIndex[i] == cfgIdx) return (int8_t)i;
+    return -1;
+  }
 
-  // Вызывать в loop() — завершает импульсы
-  void update() {
+  // Вызывать в loop() — завершение импульсов
+  // Возвращает битовую маску реле, у которых изменилось состояние
+  uint8_t update() {
+    uint8_t changed = 0;
     unsigned long now = millis();
     for (uint8_t i = 0; i < _count; i++) {
       if (_pulsing[i] && now >= _pulseEnd[i]) {
-        setRelay(i, false);
-        _state[i]    = false;
-        _pulsing[i]  = false;
+        _setPin(i, false);
+        _state[i]   = false;
+        _pulsing[i] = false;
+        changed |= (1 << i);
       }
     }
+    return changed;
   }
 
 private:
   uint8_t  _count = 0;
   uint8_t  _pins[MAX_RELAYS];
   bool     _activeLow[MAX_RELAYS];
+  uint8_t  _cfgIndex[MAX_RELAYS];   // relay manager index → config index
   bool     _state[MAX_RELAYS];
-  bool     _pulsing[MAX_RELAYS]  = {false};
-  unsigned long _pulseEnd[MAX_RELAYS] = {0};
+  bool     _pulsing[MAX_RELAYS];
+  unsigned long _pulseEnd[MAX_RELAYS];
 
-  void setRelay(uint8_t i, bool on) {
-    Serial.printf("[Relay(%u)] ==> %s\n", _pins[i], on ? "ON" : "OFF");
+  void _setPin(uint8_t i, bool on) {
+    Serial.printf("[RELAY] pin=%u -> %s\n", _pins[i], on ? "ON" : "OFF");
     digitalWrite(_pins[i], _activeLow[i] ? !on : on);
   }
 };

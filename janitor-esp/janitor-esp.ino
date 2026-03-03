@@ -1,16 +1,20 @@
 /*
  * Janitor ESP — система управления реле
- * Версия: 1.2.0
- * Поддержка: ESP8266 / ESP32
- * 
- * Библиотеки (установить через Arduino Library Manager):
- *   - GyverPortal         3.x
- *   - PubSubClient        2.8+
- *   - ArduinoJson         6.x
- *   - LittleFS            (встроена)
+ * v1.2.0 — ESP8266 / ESP32
  *
- * Для ESP8266: в Board Manager установить esp8266 by ESP8266 Community
- * Для ESP32:   в Board Manager установить esp32 by Espressif
+ * Библиотеки: GyverPortal 3.x, PubSubClient 2.8+, ArduinoJson 6/7, LittleFS
+ *
+ * Логика:
+ *  1. Первый запуск → CaptivePortal (WiFi + реле)
+ *  2. Вкладка Привязка → ввести 6-значный код из панели администратора
+ *  3. При следующей загрузке ESP отправляет код + список реле на сервер
+ *  4. Сервер возвращает MQTT credentials и один общий топик
+ *  5. ESP подключается к MQTT и готов принимать команды
+ *
+ * MQTT:
+ *  relay/{topic}/cmd    ← входящие команды: {action, relay, duration?}
+ *  relay/{topic}/status → статус всех реле (retained)
+ *  sys/devices/{mac}/status → LWT: online/offline (retained)
  */
 
 #include "config.h"
@@ -21,114 +25,84 @@
 #include "captive.h"
 #include "mqtt_mgr.h"
 
-// ── Глобальное состояние ──────────────────────────────────────
 DeviceConfig cfg;
 DeviceState  state = STATE_PORTAL;
 
-// Флаг — нужно ли запустить портал
-// (GPIO0 зажат при старте = принудительный портал)
 #ifdef ESP32
   #define RESET_PIN RX
 #else
-  #define RESET_PIN RX  // FLASH кнопка на NodeMCU // D3 для WeMos mini
+  #define RESET_PIN RX
 #endif
 
-// ── Проверить нужен ли портал ─────────────────────────────────
 bool needPortal() {
-  // Нет конфига — всегда портал
   if (!LittleFS.exists(CONFIG_FILE)) return true;
-
-  // Кнопка FLASH зажата при старте
   pinMode(RESET_PIN, INPUT_PULLUP);
   delay(100);
   if (digitalRead(RESET_PIN) == LOW) {
-    Serial.println(F("[BOOT] Reset button held, starting portal"));
+    Serial.println(F("[BOOT] Reset button held"));
     return true;
   }
-
-  // Нет WiFi настроек
   if (strlen(cfg.wifi1_ssid) == 0) return true;
-
   return false;
 }
 
-// ── Регистрация непривязанных реле ───────────────────────────
-void registerPendingRelays() {
-
+void registerIfNeeded() {
   cfg.printTo(Serial);
-
-  bool changed = false;
-  //auto relay_count = cfg.relayCount();
-  for (uint8_t i = 0; i < MAX_RELAYS/* cfg.relay_count */; i++) {
-    if ( ! cfg.relays[i].isValid() ) continue;
-    
-    if (strlen(cfg.relays[i].mqtt_code) == 6) {
-      Serial.printf("[BOOT] Relay %d has pending code, registering...\n", i+1);
-      if (MqttMgr.registerRelay(i)) {
-        changed = true;
-      } else {
-        Serial.printf("[BOOT] Relay %d registration failed\n", i+1);
-      }
-    }
+  if (!cfg.hasPendingCode()) {
+    Serial.println(F("[REG] No pending code"));
+    return;
   }
-  if (changed) Storage.saveConfig(cfg);
+  Serial.println(F("[REG] Registering device..."));
+  if (MqttMgr.registerDevice()) {
+    Storage.saveMainConfig(cfg);   // MQTT credentials + topic
+    Storage.saveRelayConfig(cfg);  // реле (без кодов)
+    Serial.println(F("[REG] Saved"));
+  } else {
+    Serial.println(F("[REG] Failed — re-enter code in portal"));
+  }
+}
+
+void checkTimeSync() {
+  static bool synced = false;
+  if (synced || !EspTime::isSynced()) return;
+  synced = true;
+  Serial.print(F("[NTP] Synced: "));
+  EspTime::timeTo(Serial);
 }
 
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println(F("\n\n[BOOT] Janitor ESP v" FW_VERSION));
-  Serial.println(F("[BOOT] ") + String(
-    #ifdef ESP32
-      "ESP32"
-    #else
-      "ESP8266"
-    #endif
-  ));
+  Serial.println(F("\n[BOOT] Janitor ESP v" FW_VERSION));
 
-  // Инициализация
   Led.begin();
-  Led.setMode( LedManager::CONNECTING );
+  Led.setMode(LedManager::CONNECTING);
 
-  // Инициализируем крипто (ключ из MAC, нужен WiFi для чтения MAC)
-  WiFi.mode(WIFI_STA); delay(1);
+  WiFi.mode(WIFI_STA);
+  delay(10);
   Crypto::begin();
 
-  // Монтируем файловую систему
   if (!Storage.begin()) {
-    Serial.println(F("[BOOT] Storage failed!"));
-    Led.setMode( LedManager::ERROR );
+    Led.setMode(LedManager::ERROR);
     while (true) { Led.update(); delay(10); }
   }
 
-  // Загружаем конфиг
   Storage.loadConfig(cfg);
-
-  // Инициализируем реле
+  Serial.print("Config: "); cfg.printTo(Serial);
   Relays.begin(cfg);
 
-  // Решаем — нужен ли портал
   if (needPortal()) {
-    Serial.println(F("[BOOT] Starting CaptivePortal..."));
     state = STATE_PORTAL;
     Portal.begin(cfg);
-
-    // Крутим портал пока пользователь не нажмёт "Завершить"
-    while (!Portal.tick()) {
-      delay(1);
-    }
-
+    while (!Portal.tick()) { delay(1); }
     Portal.stop();
-    Serial.println(F("[BOOT] Portal closed, restarting..."));
     delay(500);
     ESP.restart();
     return;
   }
 
-  // Подключаемся к WiFi
   state = STATE_CONNECTING;
   if (!WifiMgr.connect(cfg)) {
-    Serial.println(F("[BOOT] WiFi failed, starting portal..."));
     Portal.begin(cfg);
     while (!Portal.tick()) { delay(1); }
     Portal.stop();
@@ -136,35 +110,27 @@ void setup() {
     return;
   }
 
-// Синхронизация времени
   bool needTls = cfg.tls_secure && Storage.hasCert();
   if (!WifiMgr.syncTime(needTls)) {
-    Serial.println(F("[BOOT] NTP failed!"));
     if (needTls) {
-      // Без времени TLS не работает — уходим в портал
       Portal.begin(cfg);
       while (!Portal.tick()) { delay(1); }
       Portal.stop();
       ESP.restart();
       return;
     }
-  }  
+  }
+  checkTimeSync();
 
-  // Инициализируем MQTT
   MqttMgr.begin(cfg);
+  registerIfNeeded();
 
-  // Регистрируем реле если есть коды привязки
-  registerPendingRelays();
-
-
-
-  // Подключаемся к MQTT
   if (!MqttMgr.connect()) {
-    Serial.println(F("[BOOT] MQTT initial connect failed, will retry in loop"));
-    Led.setMode( LedManager::ERROR );
-    //Led.setMode( LedManager::ERROR );
+    Serial.println(F("[BOOT] MQTT failed, will retry"));
+    Led.setMode(LedManager::ERROR);
   } else {
-    Led.setMode( LedManager::RUNNING );
+    Led.setMode(LedManager::RUNNING);
+    MqttMgr.publishAllStatuses();
   }
 
   state = STATE_RUNNING;
@@ -172,27 +138,19 @@ void setup() {
 }
 
 void loop() {
+  checkTimeSync();
   Led.update();
-  Relays.update();
 
-  // Публикуем статус реле после окончания импульса
-  static bool prevState[MAX_RELAYS] = {false};
-  for (uint8_t i = 0; i < MAX_RELAYS/* cfg.relay_count */; i++) {
-    bool cur = Relays.getState(i);
-    if (cur != prevState[i]) {
-      prevState[i] = cur;
-      MqttMgr.publishRelayStatus(i, cur);
-    }
+  // Обновляем реле, при окончании импульса публикуем статус
+  if (Relays.update() && MqttMgr.isConnected()) {
+    MqttMgr.publishAllStatuses();
   }
 
-  // Проверяем WiFi
   if (!WifiMgr.reconnectIfNeeded(cfg)) {
-    Led.setMode( LedManager::ERROR );
+    Led.setMode(LedManager::ERROR);
     return;
   }
 
-  // MQTT tick
   MqttMgr.tick();
-
   delay(10);
 }

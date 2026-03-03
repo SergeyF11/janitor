@@ -194,6 +194,13 @@ export async function removeUserFromGroup(groupId, userId) {
 }
 
 // ── Admin: сессии и флаги ─────────────────────────────────────
+export async function adminResetUserPassword(userId, password) {
+  return apiFetch(`/admin/users/${userId}/password`, {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  })
+}
+
 export async function resetUserSessions(userId) {
   return apiFetch(`/admin/users/${userId}/reset-sessions`, { method: 'POST' })
 }
@@ -206,6 +213,13 @@ export async function updateSingleSession(userId, single_session) {
 }
 
 // ── Admin: устройства ─────────────────────────────────────────
+export async function adminTriggerRelay(groupId, relayIndex = 0) {
+  return apiFetch(`/admin/groups/${groupId}/trigger`, {
+    method: 'POST',
+    body: JSON.stringify({ relay: relayIndex }),
+  })
+}
+
 export async function getGroupDevice(groupId) {
   return apiFetch(`/admin/groups/${groupId}/device`)
 }
@@ -329,4 +343,12 @@ export function createWsConnection(onMessage) {
   ws.onerror = (e) => console.error('[ws] error', e)
 
   return ws
+}
+
+export async function importUsersFromGroup(groupId, sourceGroupId) {
+  return apiFetch(`/admin/groups/${groupId}/import-from/${sourceGroupId}`, { method: 'POST' })
+}
+
+export async function getAdminUsers() {
+  return apiFetch('/admin/users')
 }

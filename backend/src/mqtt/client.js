@@ -26,10 +26,9 @@ async function connect() {
   client.on('connect', () => {
     console.log(`[mqtt] Connected to ${url}`)
 
-    // Подписаться на статусы устройств и heartbeat
-    client.subscribe('sys/devices/+/heartbeat', { qos: 1 })
-    client.subscribe('sys/devices/+/status',    { qos: 1 })
-    client.subscribe('relay/+/status',          { qos: 1 })
+    // Подписаться на статусы устройств (LWT + online) и статус реле
+    client.subscribe('sys/devices/+/status', { qos: 1 })
+    client.subscribe('relay/+/status',       { qos: 1 })
   })
 
   client.on('message', async (topic, payload) => {
@@ -54,33 +53,26 @@ async function connect() {
 async function handleMessage(topic, payload) {
   const db = getDb()
 
-  // sys/devices/<MAC>/heartbeat
-  const hbMatch = topic.match(/^sys\/devices\/([^/]+)\/heartbeat$/)
-  if (hbMatch) {
-    const deviceId = hbMatch[1]
+  // sys/devices/<MAC>/status — online при подключении, offline по LWT
+  const statusMatch = topic.match(/^sys\/devices\/([^/]+)\/status$/)
+  if (statusMatch) {
+    const deviceId = statusMatch[1]
+    let online = true
     let fwVersion = null
     try {
       const data = JSON.parse(payload)
+      online    = data.online !== false   // false только если явно {"online":false}
       fwVersion = data.fw_version || null
     } catch {}
 
     await db`
       UPDATE devices
-      SET last_seen  = NOW(),
+      SET is_online  = ${online},
+          last_seen  = CASE WHEN ${online} THEN NOW() ELSE last_seen END,
           fw_version = COALESCE(${fwVersion}, fw_version)
       WHERE device_id = ${deviceId}
     `
-    // Уведомить WebSocket клиентов об обновлении статуса
-    broadcastDeviceStatus(deviceId, true)
-    return
-  }
-
-  // sys/devices/<MAC>/status — расширенный статус от ESP
-  const statusMatch = topic.match(/^sys\/devices\/([^/]+)\/status$/)
-  if (statusMatch) {
-    const deviceId = hbMatch?.[1] || statusMatch[1]
-    await db`UPDATE devices SET last_seen = NOW() WHERE device_id = ${deviceId}`
-    broadcastDeviceStatus(deviceId, true)
+    broadcastDeviceStatus(deviceId, online)
     return
   }
 

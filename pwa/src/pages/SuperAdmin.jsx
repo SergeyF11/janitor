@@ -406,17 +406,6 @@ function GroupsTab({ data, reload }) {
 
 // ── Пользователи ──────────────────────────────────────────────
 function UsersTab({ data, reload }) {
-  const [resetPwd, setResetPwd] = useState({})
-
-  async function handleResetPwd(id) {
-    const pwd = (resetPwd[id] || '').trim()
-    if (pwd.length < 6) return alert('Минимум 6 символов')
-    try {
-      await saResetUserPassword(id, pwd)
-      setResetPwd(p => ({ ...p, [id]: '' }))
-      alert('Пароль сброшен.')
-    } catch (e) { alert(e.message) }
-  }
 
   async function handleToggle(id, field, val) {
     try { await saUpdateUser(id, { [field]: val }); reload() } catch (e) { alert(e.message) }
@@ -451,13 +440,7 @@ function UsersTab({ data, reload }) {
                   ⏏ Сессия
                 </button>
               )}
-              <input className="input-inline" placeholder="Новый пароль" type="password"
-                     value={resetPwd[u.id] || ''}
-                     onChange={e => setResetPwd(p => ({ ...p, [u.id]: e.target.value }))} />
-              <button className="btn btn-warning btn-xs"
-                      onClick={() => handleResetPwd(u.id)}>
-                Сбросить пароль
-              </button>
+
             </div>
           </div>
         ))}

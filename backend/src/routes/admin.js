@@ -261,6 +261,37 @@ async function adminRoutes(app) {
 
   // ── УПРАВЛЕНИЕ СЕССИЯМИ И ФЛАГАМИ ────────────────────────────
 
+  // POST /api/admin/users/:userId/password — смена пароля пользователя
+  app.post('/admin/users/:userId/password', {
+    onRequest: [authenticate, requireRole('admin', 'superadmin')],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['password'],
+        properties: {
+          password: { type: 'string', minLength: 6 }
+        }
+      }
+    }
+  }, async (req, reply) => {
+    const db       = getDb()
+    const targetId = req.params.userId
+    const { password } = req.body
+
+    // Проверить права: только пользователи из своих групп
+    await assertCanManageUser(req.user, targetId, db)
+
+    const bcrypt = require('bcryptjs')
+    const hash   = await bcrypt.hash(password, 10)
+    await db`UPDATE users SET password_hash = ${hash} WHERE id = ${targetId}`
+
+    await db`
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id)
+      VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${targetId})
+    `
+    return { ok: true }
+  })
+
   // POST /api/admin/users/:userId/reset-sessions
   app.post('/admin/users/:userId/reset-sessions', {
     onRequest: [authenticate, requireRole('admin', 'superadmin')]
@@ -322,6 +353,62 @@ async function adminRoutes(app) {
 
   // ── УСТРОЙСТВА ESP ────────────────────────────────────────────
 
+  // POST /api/admin/groups/:id/trigger — управление реле (для администратора)
+  // Body: { relay: 0 }  — индекс реле (опционально, по умолчанию 0)
+  app.post('/admin/groups/:id/trigger', {
+    onRequest: [authenticate],
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          relay: { type: 'integer', minimum: 0, maximum: 7, default: 0 }
+        }
+      }
+    }
+  }, async (req, reply) => {
+    const db      = getDb()
+    const groupId = req.params.id
+    const relayIdx = req.body?.relay ?? 0
+
+    await requireGroupAdmin(db, req.user, groupId)
+
+    const [group] = await db`
+      SELECT id, mqtt_topic, relay_duration_ms FROM groups WHERE id = ${groupId}
+    `
+    if (!group) return reply.code(404).send({ error: 'not_found' })
+
+    let mqttAction, newState
+    if (group.relay_duration_ms === 0) {
+      const [last] = await db`
+        SELECT payload->>'state' as state FROM event_log
+        WHERE group_id = ${groupId} AND action = 'relay_trigger'
+        ORDER BY ts DESC LIMIT 1
+      `
+      newState   = last?.state === 'on' ? 'off' : 'on'
+      mqttAction = { action: newState, relay: relayIdx }
+    } else {
+      newState   = 'pulse'
+      mqttAction = { action: 'pulse', relay: relayIdx, duration: group.relay_duration_ms }
+    }
+
+    const topic = `relay/${group.mqtt_topic}/cmd`
+    try {
+      const mqttClient = app.mqtt
+      if (mqttClient && mqttClient.connected) {
+        mqttClient.publish(topic, JSON.stringify(mqttAction), { qos: 1 })
+      }
+    } catch (err) {
+      console.error('[mqtt] publish error:', err.message)
+    }
+
+    await db`
+      INSERT INTO event_log (actor_id, actor_login, action, group_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'relay_trigger', ${groupId},
+              ${JSON.stringify({ ...mqttAction, state: newState, topic, by: 'admin' })})
+    `
+    return { ok: true, state: newState, action: mqttAction }
+  })
+
   // POST /api/admin/groups/:id/device-token — генерация кода привязки ESP
   app.post('/admin/groups/:id/device-token', {
     onRequest: [authenticate, requireGroupAdmin]
@@ -355,8 +442,7 @@ async function adminRoutes(app) {
              dg.relay_index,
              dt.code        as pending_code,
              dt.expires_at  as code_expires_at,
-             CASE WHEN d.last_seen > NOW() - INTERVAL '2 minutes'
-                  THEN true ELSE false END as is_online
+             d.is_online
       FROM groups g
       LEFT JOIN device_groups dg ON dg.group_id = g.id
       LEFT JOIN devices d ON d.device_id = dg.device_id

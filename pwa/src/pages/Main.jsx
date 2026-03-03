@@ -150,9 +150,7 @@ export default function Main({ user, onLogout }) {
                      title={online ? 'Устройство онлайн' : 'Устройство оффлайн'} />
               </div>
 
-              {group.description && (
-                <div className="group-description">{group.description}</div>
-              )}
+
 
               {/* Кнопка управления */}
               <button
