@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   getAdminGroups, getGroupUsers, getAdminUsers, createUser, addUserById, importUsersFromGroup,
   removeUserFromGroup, resetUserSessions, updateSingleSession, adminResetUserPassword,
   getGroupDevice, generateDeviceToken, adminTriggerRelay,
-  getGroupLogs, logout
+  getGroupLogs
 } from '../api'
 
 export default function Admin({ user, onLogout }) {
