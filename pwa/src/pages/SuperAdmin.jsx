@@ -651,20 +651,25 @@ function LogsTab({ data, reload }) {
       </div>
       <div className="logs-list">
         {data.length === 0 && <div className="empty-state">Нет событий</div>}
-        {data.map(l => (
-          <div key={l.id} className="log-entry">
-            <span className="log-ts">{new Date(l.ts).toLocaleString('ru')}</span>
-            <span className="log-actor">{l.actor_login || '—'}</span>
-            <span className={`log-action action-${l.action}`}>{l.action}</span>
-            {l.group_name && <span className="log-group">{l.group_name}</span>}
-            {l.payload && (
-              <span className="log-payload">
-                {JSON.stringify(l.payload).substring(0, 80)}
-              </span>
-            )}
-            {l.ip && <span className="log-ip">{l.ip}</span>}
-          </div>
-        ))}
+        {data.map(l => {
+          let p = {}
+          try { p = typeof l.payload === 'string' ? JSON.parse(l.payload) : (l.payload || {}) } catch {}
+          const hasPayload = Object.keys(p).length > 0
+          return (
+            <div key={l.id} className="log-entry">
+              <span className="log-ts">{new Date(l.ts).toLocaleString('ru')}</span>
+              <span className="log-actor">{l.actor_login || '—'}</span>
+              <span className={`log-action action-${l.action}`}>{l.action}</span>
+              {l.group_name && <span className="log-group">{l.group_name}</span>}
+              {hasPayload && (
+                <span className="log-payload">
+                  {Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+                </span>
+              )}
+              {l.ip && <span className="log-ip">{l.ip}</span>}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

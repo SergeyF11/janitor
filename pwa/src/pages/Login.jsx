@@ -40,11 +40,15 @@ export default function Login({ onSuccess }) {
               type="text"
               autoComplete="username"
               autoCapitalize="off"
+              placeholder="логин или логин@группа"
               value={form.login}
               onChange={e => setForm(f => ({ ...f, login: e.target.value }))}
               disabled={loading}
               required
             />
+            <span style={{ fontSize: 11, color: 'var(--text2)', marginTop: 4, display: 'block' }}>
+              Пользователи входят как <code>логин@группа</code>
+            </span>
           </div>
 
           <div className="field">

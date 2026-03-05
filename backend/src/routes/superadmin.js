@@ -263,13 +263,14 @@ async function superadminRoutes(app) {
           status:            { type: 'string', enum: ['active', 'blocked'] },
           expires_at:        { type: 'string', format: 'date-time' },
           grace_until:       { type: 'string', format: 'date-time' },
+          mqtt_topic:        { type: 'string', minLength: 1, maxLength: 100 },
         }
       }
     }
   }, async (req, reply) => {
     const db = getDb()
     const id = req.params.id
-    const { name, relay_duration_ms, user_quota, status, expires_at, grace_until } = req.body
+    const { name, relay_duration_ms, user_quota, status, expires_at, grace_until, mqtt_topic } = req.body
 
     if (name              !== undefined) await db`UPDATE groups SET name = ${name}, updated_at = NOW() WHERE id = ${id}`
     if (relay_duration_ms !== undefined) await db`UPDATE groups SET relay_duration_ms = ${relay_duration_ms}, updated_at = NOW() WHERE id = ${id}`
@@ -277,6 +278,11 @@ async function superadminRoutes(app) {
     if (status            !== undefined) await db`UPDATE groups SET status = ${status}, updated_at = NOW() WHERE id = ${id}`
     if (expires_at        !== undefined) await db`UPDATE groups SET expires_at = ${expires_at}, updated_at = NOW() WHERE id = ${id}`
     if (grace_until       !== undefined) await db`UPDATE groups SET grace_until = ${grace_until}, updated_at = NOW() WHERE id = ${id}`
+    if (mqtt_topic        !== undefined) {
+      const [taken] = await db`SELECT id FROM groups WHERE mqtt_topic = ${mqtt_topic} AND id != ${id}`
+      if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
+      await db`UPDATE groups SET mqtt_topic = ${mqtt_topic}, updated_at = NOW() WHERE id = ${id}`
+    }
 
     await db`
       INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)

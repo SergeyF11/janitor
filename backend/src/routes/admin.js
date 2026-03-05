@@ -170,9 +170,22 @@ async function adminRoutes(app) {
         }
       }
 
-      // Проверить что логин не занят
-      const [taken] = await db`SELECT id FROM users WHERE login = ${login}`
-      if (taken) return reply.code(409).send({ error: 'login_taken' })
+      // Проверить уникальность логина:
+      // - для admin: глобально (по уникальному индексу)
+      // - для user:  в пределах группы
+      if (role === 'user') {
+        const [taken] = await db`
+          SELECT u.id FROM users u
+          JOIN user_groups ug ON ug.user_id = u.id
+          WHERE u.login    = ${login}
+            AND ug.group_id = ${groupId}
+            AND u.role      = 'user'
+        `
+        if (taken) return reply.code(409).send({ error: 'login_taken' })
+      } else {
+        const [taken] = await db`SELECT id FROM users WHERE login = ${login}`
+        if (taken) return reply.code(409).send({ error: 'login_taken' })
+      }
 
       const newUser = await createUser(login, password, role, req.user.id, {
         must_change_password: true,
@@ -201,7 +214,7 @@ async function adminRoutes(app) {
     await db`
       INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
       VALUES (${req.user.id}, ${req.user.login}, 'add_user_to_group', 'user', ${targetUserId},
-              ${groupId}, ${JSON.stringify({ role, description, mode: user_id ? 'existing' : 'new' })})
+              ${groupId}, ${JSON.stringify({ login: login || null, role, description, mode: user_id ? 'existing' : 'new' })})
     `
 
     return reply.code(201).send({ ok: true, userId: targetUserId })
@@ -243,7 +256,9 @@ async function adminRoutes(app) {
     }
 
     const [member] = await db`
-      SELECT role FROM user_groups WHERE group_id = ${groupId} AND user_id = ${userId}
+      SELECT ug.role, u.login FROM user_groups ug
+      JOIN users u ON u.id = ug.user_id
+      WHERE ug.group_id = ${groupId} AND ug.user_id = ${userId}
     `
     if (!member) return reply.code(404).send({ error: 'not_found' })
 
@@ -253,8 +268,9 @@ async function adminRoutes(app) {
     // Триггер auto_delete_orphan_user сработает автоматически если нужно
 
     await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id)
-      VALUES (${req.user.id}, ${req.user.login}, 'remove_user_from_group', 'user', ${userId}, ${groupId})
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'remove_user_from_group', 'user', ${userId}, ${groupId},
+              ${JSON.stringify({ login: member.login, role: member.role })})
     `
     return { ok: true }
   })

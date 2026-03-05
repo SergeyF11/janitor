@@ -2,7 +2,7 @@
 require('dotenv').config()
 const fastify = require('fastify')({ logger: true })
 const { migrate } = require('./db/migrate')
-const { connectDb } = require('./db/connection')
+const { initDb } = require('./db/connection')
 
 async function buildApp() {
   await fastify.register(require('@fastify/cors'), { origin: process.env.CORS_ORIGIN || true, credentials: true })
@@ -21,7 +21,7 @@ async function buildApp() {
   await fastify.register(require('@fastify/static'), { root: require('path').join(__dirname, '..', 'public'), prefix: '/janitor/' })
   await fastify.register(require('@fastify/websocket'))
 
-  // db connects lazily via getDb()
+  await initDb()
   if (process.env.RUN_MIGRATIONS === 'true') await migrate()
 
   const mqttClient = await require('./mqtt/client').connect()

@@ -63,14 +63,55 @@ async function issueRefreshToken(userId, ip, userAgent) {
 }
 
 // ── Логин ─────────────────────────────────────────────────────
-async function loginUser(login, password, ip, userAgent, fastify) {
+async function loginUser(loginStr, password, ip, userAgent, fastify) {
   const db = getDb()
 
-  const [user] = await db`
-    SELECT id, login, password_hash, role, single_session,
-           must_change_password, is_active, token_version
-    FROM users WHERE login = ${login}
-  `
+  let user
+
+  const atIdx = loginStr.lastIndexOf('@')
+  if (atIdx > 0) {
+    const login      = loginStr.substring(0, atIdx)
+    const groupTopic = loginStr.substring(atIdx + 1)
+
+    // Попытка 1: user@mqtt_topic
+    const [userRow] = await db`
+      SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
+             u.must_change_password, u.is_active, u.token_version
+      FROM users u
+      JOIN user_groups ug ON ug.user_id = u.id
+      JOIN groups g       ON g.id = ug.group_id
+      WHERE u.login      = ${login}
+        AND g.mqtt_topic = ${groupTopic}
+        AND u.role       = 'user'
+        AND g.status     = 'active'
+        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
+      LIMIT 1
+    `
+    if (userRow) {
+      user = userRow
+    } else {
+      // Попытка 2: admin@something — полный логин как есть
+      const [adminRow] = await db`
+        SELECT id, login, password_hash, role, single_session,
+               must_change_password, is_active, token_version
+        FROM users
+        WHERE login = ${loginStr}
+          AND role IN ('admin', 'superadmin')
+      `
+      user = adminRow
+    }
+  } else {
+    // Без @ — только admin/superadmin
+    const [row] = await db`
+      SELECT id, login, password_hash, role, single_session,
+             must_change_password, is_active, token_version
+      FROM users
+      WHERE login = ${loginStr}
+        AND role IN ('admin', 'superadmin')
+    `
+    user = row
+  }
+
   if (!user) throw new Error('invalid_credentials')
   if (!user.is_active) throw new Error('user_inactive')
 

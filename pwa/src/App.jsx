@@ -6,12 +6,11 @@ import {
 import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
 import Main from './pages/Main'
-import Admin from './pages/Admin'
 import SuperAdmin from './pages/SuperAdmin'
 import './App.css'
 
 export default function App() {
-  const [state, setState]   = useState('loading')  // loading | login | change_password | main | admin | superadmin
+  const [state, setState]   = useState('loading')  // loading | login | change_password | main | superadmin
   const [user, setUser]     = useState(null)
   const [error, setError]   = useState(null)
 
@@ -35,8 +34,6 @@ export default function App() {
             setState('change_password')
           } else if (me.role === 'superadmin') {
             setState('superadmin')
-          } else if (me.role === 'admin') {
-            setState('admin')
           } else {
             setState('main')
           }
@@ -56,8 +53,6 @@ export default function App() {
       setState('change_password')
     } else if (data.user.role === 'superadmin') {
       setState('superadmin')
-    } else if (data.user.role === 'admin') {
-      setState('admin')
     } else {
       setState('main')
     }
@@ -67,8 +62,6 @@ export default function App() {
     setUser(data.user)
     if (data.user.role === 'superadmin') {
       setState('superadmin')
-    } else if (data.user.role === 'admin') {
-      setState('admin')
     } else {
       setState('main')
     }
@@ -88,10 +81,6 @@ export default function App() {
 
   if (state === 'change_password') {
     return <ChangePassword user={user} onSuccess={handlePasswordChanged} />
-  }
-
-  if (state === 'admin') {
-    return <Admin user={user} onLogout={handleLogout} />
   }
 
   if (state === 'superadmin') {

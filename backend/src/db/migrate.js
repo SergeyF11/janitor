@@ -28,7 +28,7 @@ async function migrate() {
   await db.unsafe(`
     CREATE TABLE users (
       id                   UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-      login                VARCHAR(100) NOT NULL UNIQUE,
+      login                VARCHAR(100) NOT NULL,
       password_hash        TEXT         NOT NULL,
       display_name         VARCHAR(200),
       phone                VARCHAR(50),
@@ -42,6 +42,14 @@ async function migrate() {
       created_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
       updated_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     );
+  `)
+
+  // Логин уникален глобально только для admin/superadmin.
+  // Для role=user уникальность в пределах группы контролируется в коде.
+  await db.unsafe(`
+    CREATE UNIQUE INDEX idx_users_login_staff
+    ON users(login)
+    WHERE role IN ('superadmin', 'admin');
   `)
 
   // Скользящее окно 90 дней: каждое использование продлевает срок
@@ -114,6 +122,7 @@ async function migrate() {
       mqtt_pass_hash TEXT         NOT NULL,
       fw_version     VARCHAR(50),
       last_seen      TIMESTAMPTZ,
+      is_online      BOOLEAN      NOT NULL DEFAULT false,
       registered_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     );
   `)
@@ -165,7 +174,7 @@ async function migrate() {
       ${process.env.SUPERADMIN_LOGIN || 'superadmin'},
       ${hash}, 'superadmin', false, false, 0
     )
-    ON CONFLICT (login) DO NOTHING
+    ON CONFLICT ( login ) DO NOTHING
   `
 
   console.log('[db] Migration complete ✓')
