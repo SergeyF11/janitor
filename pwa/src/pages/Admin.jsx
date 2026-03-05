@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   getAdminGroups, getGroupUsers, getAdminUsers, createUser, addUserById, importUsersFromGroup,
   removeUserFromGroup, resetUserSessions, updateSingleSession, adminResetUserPassword,
   getGroupDevice, generateDeviceToken, adminTriggerRelay,
-  getGroupLogs
+  getGroupLogs, logout, updateUserDescription
 } from '../api'
 
 export default function Admin({ user, onLogout }) {
@@ -84,42 +84,122 @@ export default function Admin({ user, onLogout }) {
 }
 
 // ── Главный экран: кнопки управления реле ────────────────────
+// function RelayView({ group }) {
+//   const [device, setDevice]       = useState(null)
+//   const [pressing, setPressing]   = useState({})
+//   const [lastState, setLastState] = useState({})
+//   const [error, setError]         = useState(null)
+
+//   useEffect(() => {
+//     getGroupDevice(group.id).then(setDevice).catch(() => {})
+//   }, [group.id])
+
+//   async function handleTrigger(relayIndex = 0) {
+//     setError(null)
+//     setPressing(p => ({ ...p, [relayIndex]: true }))
+//     try {
+//       const res = await adminTriggerRelay(group.id, relayIndex)
+//       setLastState(s => ({ ...s, [relayIndex]: res.state }))
+//     } catch (e) {
+//       setError(e.message)
+//     } finally {
+//       setPressing(p => ({ ...p, [relayIndex]: false }))
+//     }
+//   }
+
+//   const isPulse   = group.relay_duration_ms > 0
+//   const hasDevice = !!device?.device_id
+//   const isOnline  = device?.is_online
+
+//   const relays = device?.relay_index != null
+//     ? [{ index: device.relay_index, name: 'Реле ' + (device.relay_index + 1) }]
+//     : [{ index: 0, name: 'Реле 1' }]
+
+//   return (
+//     <div className="relay-view">
+//       {/* Статус устройства */}
+//       <div className="device-status-bar">
+//         <span className={`device-dot-lg ${hasDevice && isOnline ? 'online' : 'offline'}`} />
+//         <span style={{ fontSize: 13, color: 'var(--text2)' }}>
+//           {hasDevice
+//             ? `${isOnline ? 'Онлайн' : 'Оффлайн'} · ${device.device_id}${device.fw_version ? ` · v${device.fw_version}` : ''}`
+//             : 'Устройство не привязано'}
+//         </span>
+//       </div>
+
+//       {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
+
+//       {/* Кнопки реле */}
+//       <div className="relay-buttons">
+//         {relays.map(relay => {
+//           const st   = lastState[relay.index]
+//           const busy = pressing[relay.index]
+//           return (
+//             <button
+//               key={relay.index}
+//               className={`relay-btn${st === 'on' ? ' relay-btn-on' : ''}${busy ? ' relay-btn-busy' : ''}`}
+//               onClick={() => handleTrigger(relay.index)}
+//               disabled={busy || !hasDevice}
+//             >
+//               {busy
+//                 ? <span className="relay-btn-spinner" />
+//                 : <>
+//                     <span className="relay-btn-icon">
+//                       {isPulse ? '⚡' : st === 'on' ? '🔴' : '🟢'}
+//                     </span>
+//                     <span className="relay-btn-label">{relay.name}</span>
+//                     <span className="relay-btn-hint">
+//                       {isPulse
+//                         ? `импульс ${group.relay_duration_ms / 1000} с`
+//                         : st === 'on' ? 'включено' : st === 'off' ? 'выключено' : '—'}
+//                     </span>
+//                   </>
+//               }
+//             </button>
+//           )
+//         })}
+//       </div>
+//     </div>
+//   )
+// }
+
 function RelayView({ group }) {
-  const [device, setDevice]       = useState(null)
-  const [pressing, setPressing]   = useState({})
-  const [lastState, setLastState] = useState({})
-  const [error, setError]         = useState(null)
+  const [device, setDevice] = useState(null);
+  const [pressing, setPressing] = useState({});
+  const [lastState, setLastState] = useState({});
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    getGroupDevice(group.id).then(setDevice).catch(() => {})
-  }, [group.id])
+    getGroupDevice(group.id).then(setDevice).catch(() => {});
+  }, [group.id]);
 
   async function handleTrigger(relayIndex = 0) {
-    setError(null)
-    setPressing(p => ({ ...p, [relayIndex]: true }))
+    setError(null);
+    setPressing(p => ({ ...p, [relayIndex]: true }));
     try {
-      const res = await adminTriggerRelay(group.id, relayIndex)
-      setLastState(s => ({ ...s, [relayIndex]: res.state }))
+      const res = await adminTriggerRelay(group.id, relayIndex);
+      setLastState(s => ({ ...s, [relayIndex]: res.state }));
     } catch (e) {
-      setError(e.message)
+      setError(e.message);
     } finally {
-      setPressing(p => ({ ...p, [relayIndex]: false }))
+      setPressing(p => ({ ...p, [relayIndex]: false }));
     }
   }
 
-  const isPulse   = group.relay_duration_ms > 0
-  const hasDevice = !!device?.device_id
-  const isOnline  = device?.is_online
+  const isPulse = group.relay_duration_ms > 0;
+  const hasDevice = !!device?.device_id;
+  const isOnline = device?.is_online;
 
+  // Список реле (в текущей версии только одно, но подготовлено на будущее)
   const relays = device?.relay_index != null
     ? [{ index: device.relay_index, name: 'Реле ' + (device.relay_index + 1) }]
-    : [{ index: 0, name: 'Реле 1' }]
+    : [{ index: 0, name: 'Реле 1' }];
 
   return (
     <div className="relay-view">
       {/* Статус устройства */}
-      <div className="device-status-bar">
-        <span className={`device-dot-lg ${hasDevice && isOnline ? 'online' : 'offline'}`} />
+      <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span className={`device-dot ${hasDevice && isOnline ? 'online' : 'offline'}`} />
         <span style={{ fontSize: 13, color: 'var(--text2)' }}>
           {hasDevice
             ? `${isOnline ? 'Онлайн' : 'Оффлайн'} · ${device.device_id}${device.fw_version ? ` · v${device.fw_version}` : ''}`
@@ -130,37 +210,41 @@ function RelayView({ group }) {
       {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
 
       {/* Кнопки реле */}
-      <div className="relay-buttons">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {relays.map(relay => {
-          const st   = lastState[relay.index]
-          const busy = pressing[relay.index]
+          const state = lastState[relay.index] || 'off';
+          const busy = pressing[relay.index];
+
           return (
             <button
               key={relay.index}
-              className={`relay-btn${st === 'on' ? ' relay-btn-on' : ''}${busy ? ' relay-btn-busy' : ''}`}
+              className={[
+                'relay-btn',
+                isPulse ? 'relay-pulse' : (state === 'on' ? 'relay-on' : 'relay-off'),
+                busy ? 'relay-busy' : '',
+                !isOnline ? 'relay-offline' : '',
+              ].join(' ')}
               onClick={() => handleTrigger(relay.index)}
               disabled={busy || !hasDevice}
             >
-              {busy
-                ? <span className="relay-btn-spinner" />
-                : <>
-                    <span className="relay-btn-icon">
-                      {isPulse ? '⚡' : st === 'on' ? '🔴' : '🟢'}
+              {busy ? (
+                <span className="relay-btn-spinner" />
+              ) : (
+                <>
+                  {isPulse ? '▶ Открыть' : (state === 'on' ? '● Включено' : '○ Выключено')}
+                  {relays.length > 1 && (
+                    <span style={{ marginLeft: '8px', fontSize: '12px', opacity: 0.8 }}>
+                      ({relay.name})
                     </span>
-                    <span className="relay-btn-label">{relay.name}</span>
-                    <span className="relay-btn-hint">
-                      {isPulse
-                        ? `импульс ${group.relay_duration_ms / 1000} с`
-                        : st === 'on' ? 'включено' : st === 'off' ? 'выключено' : '—'}
-                    </span>
-                  </>
-              }
+                  )}
+                </>
+              )}
             </button>
-          )
+          );
         })}
       </div>
     </div>
-  )
+  );
 }
 
 // ── Настройки: пользователи / устройство / журнал ─────────────
@@ -170,6 +254,8 @@ function SettingsView({ group, groups, onBack }) {
   const [device, setDevice]   = useState(null)
   const [logs, setLogs]       = useState([])
   const [showAddUser, setShowAddUser] = useState(false)
+  const [editingDesc, setEditingDesc] = useState(null)   // userId
+  const [editDescValue, setEditDescValue] = useState('')
   const [resetPwd, setResetPwd]       = useState({})  // userId → string
   const [addMode, setAddMode] = useState('new')
   const [newUser, setNewUser] = useState({ login: '', password: '', role: 'user', description: '', single_session: true })
@@ -281,8 +367,16 @@ function SettingsView({ group, groups, onBack }) {
                     </div>
                   </>
                 ) : (
-                  <ExistingUserPicker groupId={group.id} value={existingUser.user_id}
-                                      onChange={uid => setExistingUser(u => ({ ...u, user_id: uid }))} />
+                  <div className="field">
+                    <label>ID пользователя</label>
+                    <input
+                      type="text"
+                      value={existingUser.user_id}
+                      onChange={e => setExistingUser(u => ({ ...u, user_id: e.target.value }))}
+                      placeholder="00000000-0000-0000-0000-000000000000"
+                      required
+                    />
+                  </div>
                 )}
                 <div className="field">
                   <label>Описание в группе</label>
@@ -303,54 +397,86 @@ function SettingsView({ group, groups, onBack }) {
           )}
 
           <div className="users-list">
-            {users.length === 0 && <div className="empty-state">Нет пользователей</div>}
-            {users.map(u => (
-              <div key={u.id} className="user-card">
-                <div className="user-card-main">
-                  <div className="user-info">
-                    <span className="user-login">{u.login}</span>
-                    {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
-                    <span className={`user-role role-${u.role}`}>{u.role}</span>
-                    {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
-                    {!u.is_active && <span className="badge-inactive">неактивен</span>}
-                  </div>
-                  {u.description && <div className="user-description">{u.description}</div>}
-                  <div className="user-uid">
-                    <span className="user-uid-label">ID:</span>
-                    <code className="user-uid-value">{u.id}</code>
-                    <button className="btn-copy" onClick={() => navigator.clipboard?.writeText(u.id)} title="Скопировать ID">📋</button>
-                  </div>
+          {users.length === 0 && <div className="empty-state">Нет пользователей</div>}
+          {users.map(u => (
+            <div key={u.id} className="user-card">
+              <div className="user-card-main">
+                <div className="user-info">
+                  <span className="user-login">{u.login}</span>
+                  {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
+                  <span className={`user-role role-${u.role}`}>{u.role}</span>
+                  {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
+                  {!u.is_active && <span className="badge-inactive">неактивен</span>}
                 </div>
-                <div className="user-card-actions">
-                  {u.has_session && (
-                    <button className="btn btn-outline btn-xs"
-                            onClick={async () => { await resetUserSessions(u.id); loadTab() }}
-                            title="Сбросить сессию">⏏ Сессия</button>
+
+                {/* Блок описания с редактированием */}
+                <div className="user-description">
+                  {editingDesc === u.id ? (
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        value={editDescValue}
+                        onChange={e => setEditDescValue(e.target.value)}
+                        className="input-inline"
+                        style={{ flex: 1, minWidth: '150px' }}
+                        autoFocus
+                      />
+                      <button
+                        className="btn btn-primary btn-xs"
+                        onClick={async () => {
+                          try {
+                            await updateUserDescription(group.id, u.id, editDescValue)
+                            setEditingDesc(null)
+                            loadTab()
+                          } catch (err) {
+                            alert('Ошибка при сохранении описания')
+                          }
+                        }}
+                      >
+                        ✓
+                      </button>
+                      <button
+                        className="btn btn-outline btn-xs"
+                        onClick={() => setEditingDesc(null)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>{u.description || <span style={{ color: 'var(--text2)' }}>—</span>}</span>
+                      <button
+                        className="btn-icon"
+                        style={{ fontSize: '14px' }}
+                        onClick={() => {
+                          setEditingDesc(u.id)
+                          setEditDescValue(u.description || '')
+                        }}
+                        title="Редактировать описание"
+                      >
+                        ✎
+                      </button>
+                    </div>
                   )}
-                  {u.role !== 'superadmin' && (
-                    <button className={`btn btn-xs ${u.single_session ? 'btn-warning' : 'btn-outline'}`}
-                            onClick={async () => { await updateSingleSession(u.id, !u.single_session); loadTab() }}
-                            title={u.single_session ? 'Одна сессия' : 'Несколько сессий'}>
-                      {u.single_session ? '🔒 1 сессия' : '🔓 мульти'}
-                    </button>
-                  )}
-                  <input className="input-inline" placeholder="Новый пароль" type="password"
-                         autoComplete="new-password"
-                         value={resetPwd[u.id] || ''}
-                         onChange={e => setResetPwd(p => ({ ...p, [u.id]: e.target.value }))} />
-                  <button className="btn btn-warning btn-xs"
-                          disabled={!(resetPwd[u.id]?.trim().length >= 6)}
-                          onClick={() => handleResetPwd(u.id)}>
-                    Пароль
-                  </button>
-                  <button className="btn btn-danger btn-xs"
-                          onClick={async () => {
-                            if (!confirm('Удалить пользователя из группы?')) return
-                            await removeUserFromGroup(group.id, u.id); loadTab()
-                          }}>✕</button>
+                </div>
+
+                <div className="user-uid">
+                  <span className="user-uid-label">ID:</span>
+                  <code className="user-uid-value">{u.id}</code>
+                  <button className="btn-copy" onClick={() => navigator.clipboard?.writeText(u.id)} title="Скопировать ID">📋</button>
                 </div>
               </div>
-            ))}
+
+              <div className="user-card-actions">
+                {u.has_session && (
+                  <button className="btn btn-outline btn-xs"
+                          onClick={async () => { await resetUserSessions(u.id); loadTab() }}
+                          title="Сбросить сессию">⏏ Сессия</button>
+                )}
+                {/* остальные кнопки */}
+              </div>
+            </div>
+          ))}
           </div>
         </div>
       )}
@@ -413,45 +539,6 @@ function SettingsView({ group, groups, onBack }) {
   )
 }
 
-// ── Выбор существующего пользователя ─────────────────────────
-function ExistingUserPicker({ groupId, value, onChange }) {
-  const [users, setUsers]     = useState([])
-  const [search, setSearch]   = useState('')
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    getAdminUsers().then(setUsers).catch(() => {}).finally(() => setLoading(false))
-  }, [])
-
-  const filtered = users.filter(u =>
-    !search ||
-    u.login.toLowerCase().includes(search.toLowerCase()) ||
-    (u.display_name || '').toLowerCase().includes(search.toLowerCase())
-  )
-
-  if (loading) return <div className="field"><div className="spinner" style={{ width: 20, height: 20, borderWidth: 2 }} /></div>
-  if (users.length === 0) return <div className="field"><div className="empty-state" style={{ padding: '12px 0' }}>Нет пользователей в других группах</div></div>
-
-  return (
-    <div className="field">
-      <label>Выберите пользователя</label>
-      <input autoComplete="off" placeholder="Поиск..." value={search}
-             onChange={e => setSearch(e.target.value)} style={{ marginBottom: 6 }} />
-      <div className="user-picker-list">
-        {filtered.length === 0 && <div style={{ padding: '8px 12px', color: 'var(--text2)', fontSize: 13 }}>Не найдено</div>}
-        {filtered.map(u => (
-          <label key={u.id} className={`user-picker-item ${value === u.id ? 'selected' : ''}`}>
-            <input type="radio" name="existing_user" value={u.id}
-                   checked={value === u.id} onChange={() => onChange(u.id)} style={{ display: 'none' }} />
-            <span className="user-picker-login">{u.login}</span>
-            {u.display_name && <span className="user-picker-name">{u.display_name}</span>}
-            <span className={`user-role role-${u.role}`} style={{ marginLeft: 'auto' }}>{u.role}</span>
-          </label>
-        ))}
-      </div>
-    </div>
-  )
-}
 
 // ── Импорт пользователей из группы ───────────────────────────
 function ImportFromGroup({ currentGroupId, groups, onImported }) {

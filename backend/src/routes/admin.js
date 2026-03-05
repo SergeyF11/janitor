@@ -259,6 +259,91 @@ async function adminRoutes(app) {
     return { ok: true }
   })
 
+  // POST /api/admin/groups/:groupId/import-from/:sourceGroupId
+  app.post('/admin/groups/:groupId/import-from/:sourceGroupId', {
+    onRequest: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          groupId: { type: 'string', format: 'uuid' },
+          sourceGroupId: { type: 'string', format: 'uuid' }
+        },
+        required: ['groupId', 'sourceGroupId']
+      }
+    }
+  }, async (req, reply) => {
+    const db = getDb()
+    const targetGroupId = req.params.groupId
+    const sourceGroupId = req.params.sourceGroupId
+
+    // Проверка прав на целевую группу (берется из req.params.groupId)
+    await requireGroupAdmin(req, reply);
+    if (reply.sent) return;
+
+    // Проверка прав на исходную группу – временно подменяем req.params
+    const originalParams = { ...req.params };
+    req.params = { groupId: sourceGroupId };
+    await requireGroupAdmin(req, reply);
+    if (reply.sent) return;
+    req.params = originalParams;
+
+
+    // Получить квоту целевой группы (для пользователей)
+    const [targetGroup] = await db`
+      SELECT user_quota FROM groups WHERE id = ${targetGroupId}
+    `
+    if (!targetGroup) return reply.code(404).send({ error: 'group_not_found' })
+
+    // Получить всех пользователей из исходной группы
+    const sourceUsers = await db`
+      SELECT user_id, role FROM user_groups WHERE group_id = ${sourceGroupId}
+    `
+
+    // Получить текущее количество пользователей (роль user) в целевой группе
+    const [{ count: currentUserCount }] = await db`
+      SELECT COUNT(*) as count FROM user_groups
+      WHERE group_id = ${targetGroupId} AND role = 'user'
+    `
+
+    let added = 0
+    let quotaSkipped = 0
+
+    for (const user of sourceUsers) {
+      // Проверить, не существует ли уже запись в целевой группе
+      const [existing] = await db`
+        SELECT 1 FROM user_groups
+        WHERE group_id = ${targetGroupId} AND user_id = ${user.user_id}
+      `
+      if (existing) continue
+
+      // Для пользователей с ролью 'user' проверить квоту
+      if (user.role === 'user') {
+        const quota = targetGroup.user_quota
+        if (quota > 0 && currentUserCount + added >= quota) {
+          quotaSkipped++
+          continue
+        }
+      }
+
+      // Вставить пользователя
+      await db`
+        INSERT INTO user_groups (user_id, group_id, role, created_by)
+        VALUES (${user.user_id}, ${targetGroupId}, ${user.role}, ${req.user.id})
+      `
+      added++
+    }
+
+    // Записать в журнал
+    await db`
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'import_users', 'group', ${targetGroupId}, ${sourceGroupId},
+              ${JSON.stringify({ sourceGroupId, added, quotaSkipped })})
+    `
+
+    return { ok: true, added, quotaSkipped }
+  })
+
   // ── УПРАВЛЕНИЕ СЕССИЯМИ И ФЛАГАМИ ────────────────────────────
 
   // POST /api/admin/users/:userId/password — смена пароля пользователя
@@ -370,7 +455,8 @@ async function adminRoutes(app) {
     const groupId = req.params.id
     const relayIdx = req.body?.relay ?? 0
 
-    await requireGroupAdmin(db, req.user, groupId)
+    await requireGroupAdmin(req, reply)
+    if (reply.sent) return
 
     const [group] = await db`
       SELECT id, mqtt_topic, relay_duration_ms FROM groups WHERE id = ${groupId}

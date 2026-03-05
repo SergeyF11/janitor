@@ -353,25 +353,30 @@ async function superadminRoutes(app) {
 
   // ── ПОЛЬЗОВАТЕЛИ (глобально) ──────────────────────────────────
 
-  // GET /api/sa/users — все пользователи системы
-  app.get('/sa/users', {
-    onRequest: [authenticate, isSuperAdmin],
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: {
-          role:   { type: 'string', enum: ['user', 'admin', 'superadmin'] },
-          search: { type: 'string' },
-          limit:  { type: 'integer', default: 50, maximum: 200 },
-          offset: { type: 'integer', default: 0 },
-        }
+// GET /api/sa/users — все пользователи системы
+app.get('/sa/users', {
+  onRequest: [authenticate, isSuperAdmin],
+  schema: {
+    querystring: {
+      type: 'object',
+      properties: {
+        role:     { type: 'string', enum: ['user', 'admin', 'superadmin'] },
+        search:   { type: 'string' },
+        group_id: { type: 'string', format: 'uuid' },
+        limit:    { type: 'integer', default: 50, maximum: 200 },
+        offset:   { type: 'integer', default: 0 },
       }
     }
-  }, async (req) => {
-    const db = getDb()
-    const { role, search, limit = 50, offset = 0 } = req.query
+  }
+}, async (req) => {
+  const db = getDb()
+  const { role, search, group_id, limit = 50, offset = 0 } = req.query
 
-    return db`
+  console.log('GET /sa/users params:', { role, search, group_id, limit, offset })
+
+  try {
+    // Базовый запрос
+    let query = db`
       SELECT u.id, u.login, u.display_name, u.email, u.phone,
              u.role, u.single_session, u.is_active,
              u.must_change_password, u.created_at,
@@ -385,13 +390,46 @@ async function superadminRoutes(app) {
              ) as group_count
       FROM users u
       LEFT JOIN users creator ON creator.id = u.created_by
-      WHERE (${role}::text   IS NULL OR u.role = ${role}::user_role)
-        AND (${search}::text IS NULL OR u.login ILIKE ${'%' + (search || '') + '%'}
-             OR u.display_name ILIKE ${'%' + (search || '') + '%'})
-      ORDER BY u.created_at DESC
-      LIMIT ${limit} OFFSET ${offset}
     `
-  })
+
+    const conditions = []
+    
+    if (role) {
+      conditions.push(db`u.role = ${role}::user_role`)
+    }
+    
+    if (search) {
+      conditions.push(db`(u.login ILIKE ${'%' + search + '%'} 
+                          OR u.display_name ILIKE ${'%' + search + '%'} 
+                          OR u.id::text ILIKE ${'%' + search + '%'})`)
+    }
+    
+    if (group_id && group_id.trim() !== '') {
+      conditions.push(db`EXISTS (
+        SELECT 1 FROM user_groups ug 
+        WHERE ug.user_id = u.id AND ug.group_id = ${group_id}::uuid
+      )`)
+    }
+
+    // if (conditions.length > 0) {
+    //   query = db`${query} WHERE ${db.join(conditions, ' AND ')}`
+    // }
+    if (conditions.length > 0) {
+      query = db`${query} WHERE ${conditions[0]}`
+      for (let i = 1; i < conditions.length; i++) {
+        query = db`${query} AND ${conditions[i]}`
+      }
+    }
+
+    query = db`${query} ORDER BY u.created_at DESC LIMIT ${limit} OFFSET ${offset}`
+    
+    const result = await query
+    return result
+  } catch (err) {
+    console.error('Error in GET /sa/users:', err)
+    throw err // пробрасываем ошибку дальше, чтобы вернуть 500
+  }
+})
 
   // POST /api/sa/users/:id/reset-password
   app.post('/sa/users/:id/reset-password', {
@@ -543,21 +581,35 @@ async function superadminRoutes(app) {
     const db = getDb()
     const { action, actor_id, group_id, from, to, limit = 100, offset = 0 } = req.query
 
-    return db`
+    // Базовый запрос
+    let query = db`
       SELECT el.id, el.action, el.actor_login, el.actor_id,
              el.target_type, el.target_id, el.group_id,
              el.payload, el.ip, el.ts,
              g.name as group_name
       FROM event_log el
       LEFT JOIN groups g ON g.id = el.group_id
-      WHERE (${action}::text   IS NULL OR el.action   = ${action})
-        AND (${actor_id}::text IS NULL OR el.actor_id = ${actor_id}::uuid)
-        AND (${group_id}::text IS NULL OR el.group_id = ${group_id}::uuid)
-        AND (${from}::text     IS NULL OR el.ts >= ${from}::timestamptz)
-        AND (${to}::text       IS NULL OR el.ts <= ${to}::timestamptz)
-      ORDER BY el.ts DESC
-      LIMIT ${limit} OFFSET ${offset}
     `
+
+    // Массив условий
+    const where = []
+
+    if (action) where.push(db`el.action = ${action}`)
+    if (actor_id && actor_id.trim() !== '') where.push(db`el.actor_id = ${actor_id}::uuid`)
+    if (group_id && group_id.trim() !== '') where.push(db`el.group_id = ${group_id}::uuid`)
+    if (from) where.push(db`el.ts >= ${from}::timestamptz`)
+    if (to) where.push(db`el.ts <= ${to}::timestamptz`)
+
+    // Добавляем WHERE, если есть условия
+    if (where.length > 0) {
+      query = db`${query} WHERE ${db.join(where, ' AND ')}`
+    }
+
+    // Добавляем сортировку и пагинацию
+    query = db`${query} ORDER BY el.ts DESC LIMIT ${limit} OFFSET ${offset}`
+    console.log('Final query built, conditions count:', where.length)
+
+    return query
   })
 
   // ── СТАТИСТИКА ────────────────────────────────────────────────

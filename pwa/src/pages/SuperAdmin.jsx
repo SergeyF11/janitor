@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   saGetStats, saGetAdmins, saCreateAdmin, saUpdateAdmin, saDeleteAdmin,
   saResetAdminSessions, saResetAdminPassword,
-  saGetGroups, saCreateGroup, saUpdateGroup, saDeleteGroup,
+  saGetUsers, saGetGroups, saCreateGroup, saUpdateGroup, saDeleteGroup,
   saAssignGroupAdmin, saRemoveGroupAdmin,
-  saGetUsers, saUpdateUser, saResetUserPassword, saResetUserSessions,
+  saUpdateUser, saResetUserPassword, saResetUserSessions, 
   saGetDevices, saDeleteDevice,
   saGetLogs, saQuery, logout
 } from '../api'
+
 
 const TABS = ['stats', 'admins', 'groups', 'users', 'devices', 'logs', 'sql']
 const TAB_LABELS = {
@@ -30,7 +31,8 @@ export default function SuperAdmin({ user, onLogout }) {
         stats:   saGetStats,
         admins:  saGetAdmins,
         groups:  saGetGroups,
-        users:   () => saGetUsers({ limit: 100 }),
+        //users:   () => saGetUsers({ limit: 100 }),
+        users:   () => Promise.resolve([]),   // <-- добавить эту строку
         devices: saGetDevices,
         logs:    () => saGetLogs({ limit: 100 }),
         sql:     () => Promise.resolve(null),
@@ -57,7 +59,7 @@ export default function SuperAdmin({ user, onLogout }) {
     const arr = Array.isArray(data) ? data : []
     if (tab === 'admins')  return <AdminsTab  data={arr} reload={load} />
     if (tab === 'groups')  return <GroupsTab  data={arr} reload={load} />
-    if (tab === 'users')   return <UsersTab   data={arr} reload={load} />
+    if (tab === 'users')   return <UsersTab />  
     if (tab === 'devices') return <DevicesTab data={arr} reload={load} />
     if (tab === 'logs')    return <LogsTab    data={arr} reload={load} />
     return null
@@ -256,14 +258,34 @@ function AdminsTab({ data, reload }) {
 function GroupsTab({ data, reload }) {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm]     = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
-  const [assignId, setAssignId] = useState({})  // groupId → selected adminId
-  const [allAdmins, setAllAdmins] = useState([])
+  const [assignId, setAssignId]       = useState({})   // groupId → selected adminId
+  const [allAdmins, setAllAdmins]     = useState([])
+  const [saving, setSaving]           = useState(false)
+  const [err, setErr]                 = useState(null)
+  const [editTopic, setEditTopic]     = useState({})   // groupId → string
+  const [savingTopic, setSavingTopic] = useState({})   // groupId → bool
 
   useEffect(() => {
     saGetAdmins().then(setAllAdmins).catch(() => {})
   }, [])
-  const [saving, setSaving] = useState(false)
-  const [err, setErr]       = useState(null)
+
+  async function handleSaveTopic(g) {
+    const newTopic = (editTopic[g.id] ?? g.mqtt_topic).trim()
+    if (!newTopic || newTopic === g.mqtt_topic) {
+      setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })
+      return
+    }
+    setSavingTopic(s => ({ ...s, [g.id]: true }))
+    try {
+      await saUpdateGroup(g.id, { mqtt_topic: newTopic })
+      setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })
+      reload()
+    } catch (e) {
+      alert(e.message === 'mqtt_topic_taken' ? 'MQTT топик уже занят.' : 'Ошибка: ' + e.message)
+    } finally {
+      setSavingTopic(s => ({ ...s, [g.id]: false }))
+    }
+  }
 
   async function handleCreate(e) {
     e.preventDefault()
@@ -352,7 +374,39 @@ function GroupsTab({ data, reload }) {
           <div key={g.id} className="sa-row">
             <div className="sa-row-main">
               <span className="sa-row-login">{g.name}</span>
-              <span className="badge-topic">{g.mqtt_topic}</span>
+              {editTopic[g.id] !== undefined ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    className="input-inline"
+                    style={{ width: 140, fontSize: 12 }}
+                    value={editTopic[g.id]}
+                    onChange={e => setEditTopic(t => ({ ...t, [g.id]: e.target.value }))}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') handleSaveTopic(g)
+                      if (e.key === 'Escape') setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })
+                    }}
+                    autoFocus
+                  />
+                  <button className="btn btn-primary btn-xs"
+                          disabled={savingTopic[g.id]}
+                          onClick={() => handleSaveTopic(g)}>
+                    {savingTopic[g.id] ? '...' : '✓'}
+                  </button>
+                  <button className="btn btn-outline btn-xs"
+                          onClick={() => setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })}>
+                    ✕
+                  </button>
+                </span>
+              ) : (
+                <span
+                  className="badge-topic"
+                  title="Нажмите для редактирования топика"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => setEditTopic(t => ({ ...t, [g.id]: g.mqtt_topic }))}
+                >
+                  ✏️ {g.mqtt_topic}
+                </span>
+              )}
               <span className={`badge-status ${g.status}`}>{g.status}</span>
               <span className="sa-row-meta">
                 {g.user_count} польз. · {g.admin_count} адм.
@@ -405,49 +459,147 @@ function GroupsTab({ data, reload }) {
 }
 
 // ── Пользователи ──────────────────────────────────────────────
-function UsersTab({ data, reload }) {
+function UsersTab() {
+
+
+  const [users, setUsers] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [groups, setGroups] = useState([])
+  const [search, setSearch] = useState('')
+  const [groupFilter, setGroupFilter] = useState('')
+  const [roleFilter, setRoleFilter] = useState('')
+
+
+  // Загрузить список групп для фильтра
+  useEffect(() => {
+    saGetGroups().then(setGroups).catch(() => {})
+  }, [])
+
+  // Загрузить пользователей при изменении фильтров
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      try {
+        const params = { limit: 100 }
+        if (search) params.search = search
+        if (groupFilter) params.group_id = groupFilter
+        if (roleFilter) params.role = roleFilter
+        const data = await saGetUsers(params)
+        setUsers(data)
+      } catch (e) {
+        console.error(e)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [search, groupFilter, roleFilter])
 
   async function handleToggle(id, field, val) {
-    try { await saUpdateUser(id, { [field]: val }); reload() } catch (e) { alert(e.message) }
+    if (field === 'is_active' && val === false) {
+      const user = users.find(u => u.id === id)
+      if (user?.role === 'superadmin') {
+        alert('Нельзя заблокировать суперадмина')
+        return
+      }
+    }
+    try {
+      await saUpdateUser(id, { [field]: val })
+      // Обновить список после изменения
+      const params = { limit: 100 }
+      if (search) params.search = search
+      if (groupFilter) params.group_id = groupFilter
+      if (roleFilter) params.role = roleFilter
+      const data = await saGetUsers(params)
+      setUsers(data)
+    } catch (e) { alert(e.message) }
   }
 
   async function handleResetSession(id) {
-    try { await saResetUserSessions(id); reload() } catch (e) { alert(e.message) }
+    try {
+      await saResetUserSessions(id)
+      // Обновить список
+      const params = { limit: 100 }
+      if (search) params.search = search
+      if (groupFilter) params.group_id = groupFilter
+      if (roleFilter) params.role = roleFilter
+      const data = await saGetUsers(params)
+      setUsers(data)
+    } catch (e) { alert(e.message) }
   }
 
   return (
     <div className="sa-tab">
-      <div className="sa-list">
-        {data.length === 0 && <div className="empty-state">Нет пользователей</div>}
-        {data.map(u => (
-          <div key={u.id} className="sa-row">
-            <div className="sa-row-main">
-              <span className="sa-row-login">{u.login}</span>
-              {u.display_name && <span className="sa-row-name">{u.display_name}</span>}
-              <span className={`user-role role-${u.role}`}>{u.role}</span>
-              {u.has_session && <span className="session-dot" title="Активная сессия">●</span>}
-              {!u.is_active  && <span className="badge-inactive">заблокирован</span>}
-              <span className="sa-row-meta">{u.group_count} групп</span>
-            </div>
-            <div className="sa-row-actions">
-              <button className="btn btn-outline btn-xs"
-                      onClick={() => handleToggle(u.id, 'is_active', !u.is_active)}>
-                {u.is_active ? 'Блок' : 'Разблок'}
-              </button>
-              {u.has_session && (
-                <button className="btn btn-outline btn-xs"
-                        onClick={() => handleResetSession(u.id)}>
-                  ⏏ Сессия
-                </button>
-              )}
-
-            </div>
-          </div>
-        ))}
+      <div className="filters" style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        <input
+          type="text"
+          placeholder="Поиск по логину, имени или ID"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="input-inline"
+          style={{ flex: 1, minWidth: '200px' }}
+        />
+        <select
+          value={groupFilter}
+          onChange={e => setGroupFilter(e.target.value)}
+          className="input-inline"
+        >
+          <option value="">Все группы</option>
+          {groups.map(g => (
+            <option key={g.id} value={g.id}>{g.name}</option>
+          ))}
+        </select>
+        <select
+          value={roleFilter}
+          onChange={e => setRoleFilter(e.target.value)}
+          className="input-inline"
+        >
+          <option value="">Все роли</option>
+          <option value="user">Пользователи</option>
+          <option value="admin">Администраторы</option>
+          <option value="superadmin">Суперадмины</option>
+        </select>
       </div>
+
+      {loading && <div className="sa-loading"><div className="spinner" /></div>}
+      {!loading && (
+        <div className="sa-list">
+          {users.length === 0 && <div className="empty-state">Нет пользователей</div>}
+          {users.map(u => (
+            <div key={u.id} className="sa-row">
+              <div className="sa-row-main">
+                <span className="sa-row-login">{u.login}</span>
+                {u.display_name && <span className="sa-row-name">{u.display_name}</span>}
+                <span className={`user-role role-${u.role}`}>{u.role}</span>
+                {u.has_session && <span className="session-dot" title="Активная сессия">●</span>}
+                {!u.is_active && <span className="badge-inactive">заблокирован</span>}
+                <span className="sa-row-meta">{u.group_count} групп</span>
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text2)', marginTop: '4px' }}>
+                ID: <code>{u.id}</code>
+              </div>
+              <div className="sa-row-actions">
+                {u.role !== 'superadmin' && (
+                  <button className="btn btn-outline btn-xs"
+                          onClick={() => handleToggle(u.id, 'is_active', !u.is_active)}>
+                    {u.is_active ? 'Блок' : 'Разблок'}
+                  </button>
+                )}
+                {u.has_session && (
+                  <button className="btn btn-outline btn-xs"
+                          onClick={() => handleResetSession(u.id)}>
+                    ⏏ Сессия
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
+
 
 // ── Устройства ────────────────────────────────────────────────
 function DevicesTab({ data, reload }) {
@@ -488,6 +640,7 @@ function DevicesTab({ data, reload }) {
     </div>
   )
 }
+
 
 // ── Журнал ────────────────────────────────────────────────────
 function LogsTab({ data, reload }) {

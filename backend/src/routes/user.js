@@ -29,8 +29,7 @@ async function userRoutes(app) {
         ug.description, ug.role,
         -- Статус устройства группы
         (
-          SELECT CASE WHEN MAX(d.last_seen) > NOW() - INTERVAL '2 minutes'
-                      THEN true ELSE false END
+          SELECT COALESCE(bool_or(d.is_online), false)
           FROM device_groups dg
           JOIN devices d ON d.device_id = dg.device_id
           WHERE dg.group_id = g.id
@@ -95,7 +94,7 @@ async function userRoutes(app) {
     }
 
     // Опубликовать команду в MQTT
-    const topic = `relay/${group.mqtt_topic}/trigger`
+    const topic = `relay/${group.mqtt_topic}/cmd`
     try {
       const mqttClient = app.mqtt  // подключается в app.js
       if (mqttClient && mqttClient.connected) {
