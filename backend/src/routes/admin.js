@@ -384,11 +384,13 @@ async function adminRoutes(app) {
 
     const bcrypt = require('bcryptjs')
     const hash   = await bcrypt.hash(password, 10)
+    const [targetUser2] = await db`SELECT login, role FROM users WHERE id = ${targetId}`
     await db`UPDATE users SET password_hash = ${hash} WHERE id = ${targetId}`
 
     await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id)
-      VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${targetId})
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${targetId},
+              ${JSON.stringify({ login: targetUser2?.login, role: targetUser2?.role })})
     `
     return { ok: true }
   })
@@ -403,10 +405,12 @@ async function adminRoutes(app) {
     // Проверить права доступа к пользователю
     await assertCanManageUser(req.user, targetId, db)
 
+    const [targetUser] = await db`SELECT login, role FROM users WHERE id = ${targetId}`
     await resetUserSessions(targetId, req.user.id)
     await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id)
-      VALUES (${req.user.id}, ${req.user.login}, 'reset_sessions', 'user', ${targetId})
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'reset_sessions', 'user', ${targetId},
+              ${JSON.stringify({ login: targetUser?.login, role: targetUser?.role })})
     `
     return { ok: true }
   })

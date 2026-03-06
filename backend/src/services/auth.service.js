@@ -63,7 +63,7 @@ async function issueRefreshToken(userId, ip, userAgent) {
 }
 
 // ── Логин ─────────────────────────────────────────────────────
-async function loginUser(loginStr, password, ip, userAgent, fastify) {
+async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint = null) {
   const db = getDb()
 
   let user
@@ -76,7 +76,7 @@ async function loginUser(loginStr, password, ip, userAgent, fastify) {
     // Попытка 1: user@mqtt_topic
     const [userRow] = await db`
       SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
-             u.must_change_password, u.is_active, u.token_version
+             u.must_change_password, u.is_active, u.token_version, u.device_fingerprint
       FROM users u
       JOIN user_groups ug ON ug.user_id = u.id
       JOIN groups g       ON g.id = ug.group_id
@@ -93,7 +93,7 @@ async function loginUser(loginStr, password, ip, userAgent, fastify) {
       // Попытка 2: admin@something — полный логин как есть
       const [adminRow] = await db`
         SELECT id, login, password_hash, role, single_session,
-               must_change_password, is_active, token_version
+               must_change_password, is_active, token_version, device_fingerprint
         FROM users
         WHERE login = ${loginStr}
           AND role IN ('admin', 'superadmin')
@@ -104,7 +104,7 @@ async function loginUser(loginStr, password, ip, userAgent, fastify) {
     // Без @ — только admin/superadmin
     const [row] = await db`
       SELECT id, login, password_hash, role, single_session,
-             must_change_password, is_active, token_version
+             must_change_password, is_active, token_version, device_fingerprint
       FROM users
       WHERE login = ${loginStr}
         AND role IN ('admin', 'superadmin')
@@ -118,14 +118,27 @@ async function loginUser(loginStr, password, ip, userAgent, fastify) {
   const valid = await bcrypt.compare(password, user.password_hash)
   if (!valid) throw new Error('invalid_credentials')
 
-  // single_session: если уже есть активная сессия — отказать
+  // single_session: проверка привязки к устройству
   if (user.single_session) {
-    const [existing] = await db`
-      SELECT id FROM refresh_tokens
-      WHERE user_id = ${user.id} AND expires_at > NOW()
-      LIMIT 1
-    `
-    if (existing) throw new Error('session_exists')
+    if (user.device_fingerprint) {
+      // Устройство уже привязано
+      if (fingerprint && user.device_fingerprint !== fingerprint) {
+        throw new Error('device_mismatch')
+      }
+      // Проверить нет ли активной сессии на другом устройстве
+      const [existing] = await db`
+        SELECT id FROM refresh_tokens
+        WHERE user_id = ${user.id} AND expires_at > NOW()
+        LIMIT 1
+      `
+      if (existing) throw new Error('session_exists')
+    } else if (fingerprint) {
+      // Первый вход — привязать устройство
+      await db`
+        UPDATE users SET device_fingerprint = ${fingerprint}, updated_at = NOW()
+        WHERE id = ${user.id}
+      `
+    }
   }
 
   const refreshToken = await issueRefreshToken(user.id, ip, userAgent)
@@ -212,8 +225,11 @@ async function resetUserSessions(targetId, actorId) {
 
   await db`DELETE FROM refresh_tokens WHERE user_id = ${targetId}`
   // Инкремент token_version инвалидирует все выданные access токены
+  // Сброс device_fingerprint — следующий вход возможен с любого устройства
   await db`
-    UPDATE users SET token_version = token_version + 1, updated_at = NOW()
+    UPDATE users SET token_version = token_version + 1,
+                     device_fingerprint = NULL,
+                     updated_at = NOW()
     WHERE id = ${targetId}
   `
 

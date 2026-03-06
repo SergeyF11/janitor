@@ -6,6 +6,41 @@ let _accessToken = null
 let _refreshTimer = null
 let _onLogout = null  // callback при выходе/инвалидации
 
+// ── Device fingerprint ────────────────────────────────────────
+function getCanvasHash() {
+  try {
+    const c = document.createElement('canvas')
+    const ctx = c.getContext('2d')
+    ctx.textBaseline = 'top'
+    ctx.font = '14px Arial'
+    ctx.fillStyle = '#f60'
+    ctx.fillRect(125, 1, 62, 20)
+    ctx.fillStyle = '#069'
+    ctx.fillText('janitor🔑', 2, 15)
+    ctx.fillStyle = 'rgba(102,204,0,0.7)'
+    ctx.fillText('janitor🔑', 4, 17)
+    return c.toDataURL().slice(-32)
+  } catch {
+    return 'nocanvas'
+  }
+}
+
+function getDeviceFingerprint() {
+  let deviceId = localStorage.getItem('_did')
+  if (!deviceId) {
+    deviceId = crypto.randomUUID()
+    localStorage.setItem('_did', deviceId)
+  }
+  const canvasHash = getCanvasHash()
+  const raw = deviceId + '|' + canvasHash + '|' + navigator.userAgent.slice(0, 50)
+  let h = 0
+  for (let i = 0; i < raw.length; i++) {
+    h = Math.imul(31, h) + raw.charCodeAt(i) | 0
+  }
+  return deviceId.split('-')[0] + '_' + Math.abs(h).toString(36)
+}
+
+
 // ── Токен ─────────────────────────────────────────────────────
 export function setAccessToken(token) {
   _accessToken = token
@@ -97,11 +132,12 @@ export function cancelRefresh() {
 
 // ── Auth ──────────────────────────────────────────────────────
 export async function login(loginStr, password) {
+  const fingerprint = getDeviceFingerprint()
   const res = await fetch(`${BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ login: loginStr, password }),
+    body: JSON.stringify({ login: loginStr, password, fingerprint }),
   })
   if (!res.ok) throw await makeError(res)
   const data = await res.json()

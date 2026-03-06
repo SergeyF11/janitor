@@ -212,8 +212,16 @@ function formatLogEntry(l) {
       if (p.role && p.role !== 'user') parts.push(`[${p.role}]`)
       return parts.join(' ')
     }
-    case 'reset_password':      return '🔒 сброс пароля'
-    case 'reset_sessions':      return '⏏ сброс сессий'
+    case 'reset_password': {
+      const parts = ['🔒 сброс пароля']
+      if (p.login) parts.push(p.login)
+      return parts.join(' ')
+    }
+    case 'reset_sessions': {
+      const parts = ['⏏ сброс сессии']
+      if (p.login) parts.push(p.login)
+      return parts.join(' ')
+    }
     case 'assign_group_admin':  return '👤 назначен администратор'
     case 'generate_device_token': return '📟 код привязки ESP'
     case 'import_users':        return `📥 импорт пользователей`
