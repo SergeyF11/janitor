@@ -82,12 +82,14 @@ async function adminRoutes(app) {
              ug.role, ug.description, ug.created_at,
              u.single_session, u.must_change_password, u.is_active,
              u.created_by,
+             g.mqtt_topic,
              EXISTS(
                SELECT 1 FROM refresh_tokens rt
                WHERE rt.user_id = u.id AND rt.expires_at > NOW()
              ) as has_session
       FROM users u
       JOIN user_groups ug ON ug.user_id = u.id
+      JOIN groups g ON g.id = ug.group_id
       WHERE ug.group_id = ${req.params.groupId}
       ORDER BY ug.role DESC, u.login
     `
@@ -377,7 +379,7 @@ async function adminRoutes(app) {
   }, async (req, reply) => {
     const db       = getDb()
     const targetId = req.params.userId
-    const { password } = req.body
+    const { password, groupId = null } = req.body
 
     // Проверить права: только пользователи из своих групп
     await assertCanManageUser(req.user, targetId, db)
@@ -388,8 +390,9 @@ async function adminRoutes(app) {
     await db`UPDATE users SET password_hash = ${hash} WHERE id = ${targetId}`
 
     await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
       VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${targetId},
+              ${groupId},
               ${JSON.stringify({ login: targetUser2?.login, role: targetUser2?.role })})
     `
     return { ok: true }
@@ -401,6 +404,7 @@ async function adminRoutes(app) {
   }, async (req, reply) => {
     const db = getDb()
     const targetId = req.params.userId
+    const groupId  = req.body?.groupId || null
 
     // Проверить права доступа к пользователю
     await assertCanManageUser(req.user, targetId, db)
@@ -408,8 +412,9 @@ async function adminRoutes(app) {
     const [targetUser] = await db`SELECT login, role FROM users WHERE id = ${targetId}`
     await resetUserSessions(targetId, req.user.id)
     await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
       VALUES (${req.user.id}, ${req.user.login}, 'reset_sessions', 'user', ${targetId},
+              ${groupId},
               ${JSON.stringify({ login: targetUser?.login, role: targetUser?.role })})
     `
     return { ok: true }
@@ -579,8 +584,10 @@ async function adminRoutes(app) {
     const { limit = 50, offset = 0 } = req.query
     return db`
       SELECT el.id, el.action, el.actor_login, el.target_type,
-             el.target_id, el.payload, el.ip, el.ts
+             el.target_id, el.payload, el.ip, el.ts,
+             u.role as actor_role
       FROM event_log el
+      LEFT JOIN users u ON u.id = el.actor_id
       WHERE el.group_id = ${req.params.groupId}
       ORDER BY el.ts DESC
       LIMIT ${limit} OFFSET ${offset}

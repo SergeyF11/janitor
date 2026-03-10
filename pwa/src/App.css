@@ -653,3 +653,21 @@ input[type="checkbox"] { width: auto; accent-color: var(--primary); }
   padding: 2px;
 }
 .relay-settings-btn:hover { opacity: 1; }
+
+/* ── Admin credentials modal ────────────────────────────────── */
+.sa-creds-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.sa-creds-box {
+  background: var(--bg1); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px; max-width: 400px; width: 90%;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.sa-creds-title { font-weight: 600; font-size: 15px; }
+.sa-creds-row { font-size: 14px; }
+.sa-creds-row code {
+  background: var(--bg2); padding: 2px 8px; border-radius: 4px;
+  font-family: monospace; user-select: all;
+}
+.sa-creds-hint { font-size: 12px; color: var(--accent-warn, #f90); }

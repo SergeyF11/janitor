@@ -222,7 +222,12 @@ function formatLogEntry(l) {
       if (p.login) parts.push(p.login)
       return parts.join(' ')
     }
-    case 'assign_group_admin':  return '👤 назначен администратор'
+    case 'assign_group_admin': {
+      const parts = ['👤 назначен администратор']
+      if (p.admin_login) parts.push(p.admin_login)
+      if (p.group_name) parts.push(`→ группа "${p.group_name}"`)
+      return parts.join(' ')
+    }
     case 'generate_device_token': return '📟 код привязки ESP'
     case 'import_users':        return `📥 импорт пользователей`
     case 'update_group':        return '✏️ изменение группы'
@@ -260,7 +265,7 @@ function SettingsView({ group, groups, currentUser }) {
     const pwd = (resetPwd[userId] || '').trim()
     if (pwd.length < 6) return alert('Минимум 6 символов')
     try {
-      await adminResetUserPassword(userId, pwd)
+      await adminResetUserPassword(userId, pwd, group.id)
       setResetPwd(p => ({ ...p, [userId]: '' }))
       alert('Пароль изменён.')
     } catch (e) { alert(e.message) }
@@ -383,7 +388,9 @@ function SettingsView({ group, groups, currentUser }) {
               <div key={u.id} className="user-card">
                 <div className="user-card-main">
                   <div className="user-info">
-                    <span className="user-login">{u.login}</span>
+                    <span className="user-login">
+                      {u.role === 'user' ? `${u.login}@${u.mqtt_topic}` : u.login}
+                    </span>
                     {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
                     <span className={`user-role role-${u.role}`}>{u.role}</span>
                     {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
@@ -422,7 +429,7 @@ function SettingsView({ group, groups, currentUser }) {
                 <div className="user-card-actions">
                   {u.has_session && (
                     <button className="btn btn-outline btn-xs"
-                            onClick={async () => { await resetUserSessions(u.id); loadTab() }}>
+                            onClick={async () => { await resetUserSessions(u.id, group.id); loadTab() }}>
                       ⏏ Сессия
                     </button>
                   )}
@@ -434,7 +441,7 @@ function SettingsView({ group, groups, currentUser }) {
                   </button>
                   <button className="btn btn-danger btn-xs"
                           onClick={async () => {
-                            if (!confirm(`Удалить ${u.login} из группы?`)) return
+                            if (!confirm(`Удалить ${u.role === 'user' ? u.login+'@'+u.mqtt_topic : u.login} из группы?`)) return
                             await removeUserFromGroup(group.id, u.id); loadTab()
                           }}>✕</button>
                 </div>
@@ -495,7 +502,11 @@ function SettingsView({ group, groups, currentUser }) {
                     hour: '2-digit', minute: '2-digit', second: '2-digit'
                   })}
                 </span>
-                <span className="log-actor">{l.actor_login || '—'}</span>
+                <span className="log-actor">
+                  {l.actor_login
+                    ? (l.actor_role === 'user' ? `${l.actor_login}@${group.mqtt_topic}` : l.actor_login)
+                    : '—'}
+                </span>
                 <span className="log-description">{formatLogEntry(l)}</span>
               </div>
             ))}

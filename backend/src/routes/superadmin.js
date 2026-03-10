@@ -1,4 +1,19 @@
 'use strict'
+
+// ── Транслитерация для mqtt_topic ─────────────────────────────
+function toMqttTopic(str) {
+  const map = {
+    'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh',
+    'з':'z','и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o',
+    'п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts',
+    'ч':'ch','ш':'sh','щ':'sch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu',
+    'я':'ya',
+  }
+  return str.toLowerCase()
+    .split('').map(c => map[c] !== undefined ? map[c] : (/[a-z0-9]/.test(c) ? c : '_'))
+    .join('').replace(/_+/g, '_').replace(/^_|_$/g, '').substring(0, 32) || 'group'
+}
+
 const { getDb } = require('../db/connection')
 const { createUser, resetUserSessions, changePassword, authenticate, requireRole } = require('../services/auth.service')
 
@@ -168,10 +183,12 @@ async function superadminRoutes(app) {
     }
   }, async (req, reply) => {
     const db = getDb()
+    const [target] = await db`SELECT login, role FROM users WHERE id = ${req.params.id}`
     await changePassword(req.params.id, req.body.password, false)
     await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id)
-      VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${req.params.id})
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${req.params.id},
+              ${JSON.stringify({ login: target?.login, role: target?.role })})
     `
     return { ok: true }
   })
@@ -219,7 +236,7 @@ async function superadminRoutes(app) {
     schema: {
       body: {
         type: 'object',
-        required: ['name', 'mqtt_topic'],
+        required: ['name'],
         properties: {
           name:              { type: 'string', minLength: 1, maxLength: 100 },
           mqtt_topic:        { type: 'string', minLength: 1, maxLength: 100 },
@@ -231,10 +248,16 @@ async function superadminRoutes(app) {
     }
   }, async (req, reply) => {
     const db = getDb()
-    const { name, mqtt_topic, relay_duration_ms = 500, user_quota = 0, expires_at } = req.body
+    const { name, relay_duration_ms = 500, user_quota = 0, expires_at } = req.body
+    // Автогенерация топика если не указан
+    let mqtt_topic = req.body.mqtt_topic || toMqttTopic(name)
 
+    // Если топик занят — добавить суффикс
     const [taken] = await db`SELECT id FROM groups WHERE mqtt_topic = ${mqtt_topic}`
-    if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
+    if (taken) {
+      if (req.body.mqtt_topic) return reply.code(409).send({ error: 'mqtt_topic_taken' })
+      mqtt_topic = mqtt_topic + '_' + Date.now().toString(36).slice(-4)
+    }
 
     const [group] = await db`
       INSERT INTO groups (name, mqtt_topic, relay_duration_ms, user_quota, expires_at, created_by)
@@ -242,12 +265,29 @@ async function superadminRoutes(app) {
               ${expires_at || null}, ${req.user.id})
       RETURNING *
     `
+
+    // Автосоздание администратора группы: topic@admins
+    const { createUser } = require('../services/auth.service')
+    const adminLogin = `${mqtt_topic}@admins`
+    const adminPassword = require('crypto').randomBytes(12).toString('hex')
+    // Если такой логин уже существует (напр. после пересоздания группы) — удалить старого
+    await db`DELETE FROM users WHERE login = ${adminLogin} AND role = 'admin'`
+    const adminUser = await createUser(adminLogin, adminPassword, 'admin', req.user.id, {
+      must_change_password: true,
+      single_session: true,
+    })
+    // Привязать к группе
+    await db`
+      INSERT INTO user_groups (user_id, group_id, role, created_by)
+      VALUES (${adminUser.id}, ${group.id}, 'admin', ${req.user.id})
+    `
+
     await db`
       INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
       VALUES (${req.user.id}, ${req.user.login}, 'create_group', 'group', ${group.id},
-              ${JSON.stringify({ name, mqtt_topic })})
+              ${JSON.stringify({ name, mqtt_topic, admin_login: adminLogin })})
     `
-    return reply.code(201).send(group)
+    return reply.code(201).send({ ...group, admin_login: adminLogin, admin_password: adminPassword })
   })
 
   // PATCH /api/sa/groups/:id
@@ -263,14 +303,13 @@ async function superadminRoutes(app) {
           status:            { type: 'string', enum: ['active', 'blocked'] },
           expires_at:        { type: 'string', format: 'date-time' },
           grace_until:       { type: 'string', format: 'date-time' },
-          mqtt_topic:        { type: 'string', minLength: 1, maxLength: 100 },
         }
       }
     }
   }, async (req, reply) => {
     const db = getDb()
     const id = req.params.id
-    const { name, relay_duration_ms, user_quota, status, expires_at, grace_until, mqtt_topic } = req.body
+    const { name, relay_duration_ms, user_quota, status, expires_at, grace_until } = req.body
 
     if (name              !== undefined) await db`UPDATE groups SET name = ${name}, updated_at = NOW() WHERE id = ${id}`
     if (relay_duration_ms !== undefined) await db`UPDATE groups SET relay_duration_ms = ${relay_duration_ms}, updated_at = NOW() WHERE id = ${id}`
@@ -278,11 +317,6 @@ async function superadminRoutes(app) {
     if (status            !== undefined) await db`UPDATE groups SET status = ${status}, updated_at = NOW() WHERE id = ${id}`
     if (expires_at        !== undefined) await db`UPDATE groups SET expires_at = ${expires_at}, updated_at = NOW() WHERE id = ${id}`
     if (grace_until       !== undefined) await db`UPDATE groups SET grace_until = ${grace_until}, updated_at = NOW() WHERE id = ${id}`
-    if (mqtt_topic        !== undefined) {
-      const [taken] = await db`SELECT id FROM groups WHERE mqtt_topic = ${mqtt_topic} AND id != ${id}`
-      if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
-      await db`UPDATE groups SET mqtt_topic = ${mqtt_topic}, updated_at = NOW() WHERE id = ${id}`
-    }
 
     await db`
       INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
@@ -299,6 +333,18 @@ async function superadminRoutes(app) {
     const db = getDb()
     const [group] = await db`SELECT name FROM groups WHERE id = ${req.params.id}`
     if (!group) return reply.code(404).send({ error: 'not_found' })
+
+    // Удалить автоадмина topic@admins если он был создан автоматически
+    const autoAdminLogin = `${group.mqtt_topic}@admins`
+    await db`
+      DELETE FROM users
+      WHERE login = ${autoAdminLogin} AND role = 'admin'
+        AND NOT EXISTS (
+          SELECT 1 FROM user_groups ug
+          JOIN groups g ON g.id = ug.group_id
+          WHERE ug.user_id = users.id AND g.id != ${req.params.id}
+        )
+    `
 
     await db`DELETE FROM groups WHERE id = ${req.params.id}`
     // CASCADE удалит user_groups → триггер удалит осиротевших users
@@ -329,9 +375,11 @@ async function superadminRoutes(app) {
     const groupId  = req.params.id
     const adminId  = req.body.admin_id
 
-    const [admin] = await db`SELECT id, role FROM users WHERE id = ${adminId}`
+    const [admin] = await db`SELECT id, login, role FROM users WHERE id = ${adminId}`
     if (!admin) return reply.code(404).send({ error: 'user_not_found' })
     if (admin.role !== 'admin') return reply.code(400).send({ error: 'user_is_not_admin' })
+
+    const [group] = await db`SELECT name, mqtt_topic FROM groups WHERE id = ${groupId}`
 
     await db`
       INSERT INTO user_groups (user_id, group_id, role, created_by)
@@ -339,8 +387,9 @@ async function superadminRoutes(app) {
       ON CONFLICT (user_id, group_id) DO UPDATE SET role = 'admin'
     `
     await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id)
-      VALUES (${req.user.id}, ${req.user.login}, 'assign_group_admin', 'user', ${adminId}, ${groupId})
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'assign_group_admin', 'user', ${adminId}, ${groupId},
+              ${JSON.stringify({ admin_login: admin.login, group_name: group?.name, group_topic: group?.mqtt_topic })})
     `
     return { ok: true }
   })
@@ -451,10 +500,12 @@ app.get('/sa/users', {
     }
   }, async (req, reply) => {
     const db = getDb()
+    const [target] = await db`SELECT login, role FROM users WHERE id = ${req.params.id}`
     await changePassword(req.params.id, req.body.password, false)
     await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id)
-      VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${req.params.id})
+      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
+      VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${req.params.id},
+              ${JSON.stringify({ login: target?.login, role: target?.role })})
     `
     return { ok: true }
   })

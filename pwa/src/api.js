@@ -230,15 +230,18 @@ export async function removeUserFromGroup(groupId, userId) {
 }
 
 // ── Admin: сессии и флаги ─────────────────────────────────────
-export async function adminResetUserPassword(userId, password) {
+export async function adminResetUserPassword(userId, password, groupId) {
   return apiFetch(`/admin/users/${userId}/password`, {
     method: 'POST',
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ password, groupId }),
   })
 }
 
-export async function resetUserSessions(userId) {
-  return apiFetch(`/admin/users/${userId}/reset-sessions`, { method: 'POST' })
+export async function resetUserSessions(userId, groupId) {
+  return apiFetch(`/admin/users/${userId}/reset-sessions`, {
+    method: 'POST',
+    body: JSON.stringify({ groupId }),
+  })
 }
 
 export async function updateSingleSession(userId, single_session) {

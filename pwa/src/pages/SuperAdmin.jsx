@@ -21,6 +21,7 @@ export default function SuperAdmin({ user, onLogout }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState(null)
+  const [pendingCreds, setPendingCreds] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -58,7 +59,7 @@ export default function SuperAdmin({ user, onLogout }) {
     if (tab === 'stats') return <StatsTab data={data} />
     const arr = Array.isArray(data) ? data : []
     if (tab === 'admins')  return <AdminsTab  data={arr} reload={load} />
-    if (tab === 'groups')  return <GroupsTab  data={arr} reload={load} />
+    if (tab === 'groups')  return <GroupsTab  data={arr} reload={load} onCreds={setPendingCreds} />
     if (tab === 'users')   return <UsersTab />  
     if (tab === 'devices') return <DevicesTab data={arr} reload={load} />
     if (tab === 'logs')    return <LogsTab    data={arr} reload={load} />
@@ -67,6 +68,17 @@ export default function SuperAdmin({ user, onLogout }) {
 
   return (
     <div className="sa-screen">
+      {pendingCreds && (
+        <div className="sa-creds-modal">
+          <div className="sa-creds-box">
+            <div className="sa-creds-title">✅ Группа создана. Данные администратора:</div>
+            <div className="sa-creds-row"><b>Логин:</b> <code>{pendingCreds.login}</code></div>
+            <div className="sa-creds-row"><b>Пароль:</b> <code>{pendingCreds.password}</code></div>
+            <div className="sa-creds-hint">Сохраните пароль — он больше не будет показан.</div>
+            <button className="btn btn-primary" onClick={() => setPendingCreds(null)}>Понятно</button>
+          </div>
+        </div>
+      )}
       <header className="sa-header">
         <h1 className="sa-title">⚙️ Суперадмин</h1>
         <div className="sa-header-right">
@@ -254,8 +266,22 @@ function AdminsTab({ data, reload }) {
   )
 }
 
+
+// ── Транслитерация для mqtt_topic ─────────────────────────────
+function toMqttTopic(str) {
+  const map = {
+    'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh',
+    'з':'z','и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o',
+    'п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts',
+    'ч':'ch','ш':'sh','щ':'sch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya',
+  }
+  return str.toLowerCase()
+    .split('').map(c => map[c] !== undefined ? map[c] : (/[a-z0-9]/.test(c) ? c : '_'))
+    .join('').replace(/_+/g, '_').replace(/^_|_$/g, '').substring(0, 32) || 'group'
+}
+
 // ── Группы ────────────────────────────────────────────────────
-function GroupsTab({ data, reload }) {
+function GroupsTab({ data, reload, onCreds }) {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm]     = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
   const [assignId, setAssignId]       = useState({})   // groupId → selected adminId
@@ -291,9 +317,13 @@ function GroupsTab({ data, reload }) {
     e.preventDefault()
     setSaving(true); setErr(null)
     try {
-      await saCreateGroup(form)
-      setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
-      setShowCreate(false); reload()
+      const result = await saCreateGroup(form)
+      setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0, _topic_edited: false })
+      setShowCreate(false)
+      reload()
+      if (result && result.admin_login) {
+        onCreds({ login: result.admin_login, password: result.admin_password })
+      }
     } catch (e) {
       setErr(e.message === 'mqtt_topic_taken' ? 'MQTT топик занят.' : 'Ошибка: ' + e.message)
     } finally { setSaving(false) }
@@ -341,14 +371,21 @@ function GroupsTab({ data, reload }) {
             <div className="field">
               <label>Название</label>
               <input value={form.name}
-                     onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                     onChange={e => {
+                       const name = e.target.value
+                       setForm(f => ({
+                         ...f,
+                         name,
+                         mqtt_topic: f._topic_edited ? f.mqtt_topic : toMqttTopic(name)
+                       }))
+                     }}
                      required />
             </div>
             <div className="field">
-              <label>MQTT топик</label>
+              <label>MQTT топик (авто)</label>
               <input value={form.mqtt_topic}
-                     onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value }))}
-                     required />
+                     onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value, _topic_edited: true }))}
+                     placeholder="авто из названия" />
             </div>
             <div className="field">
               <label>Длит. реле мс (0=триггер)</label>
