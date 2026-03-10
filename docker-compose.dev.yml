@@ -118,7 +118,7 @@ services:
     restart: unless-stopped
     ports:
       - "8883:8883"      # TLS наружу — для ESP устройств
-      # 1883 только внутри сети — не публикуем наружу!
+      - "1883:1883"      # 1883 только внутри сети — не публикуем наружу!
     volumes:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data

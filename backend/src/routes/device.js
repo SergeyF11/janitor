@@ -1,11 +1,6 @@
 'use strict'
 const { getDb } = require('../db/connection')
-const { execSync } = require('child_process')
-const fs = require('fs')
-
-const MOSQUITTO_PASSWD = process.env.MOSQUITTO_PASSWD_FILE || '/mosquitto/config/passwd'
-const MOSQUITTO_ACL    = process.env.MOSQUITTO_ACL_FILE    || '/mosquitto/config/acl'
-const MOSQUITTO_CTR    = process.env.MOSQUITTO_CONTAINER   || 'janitor-mosquitto'
+const { createDeviceClient } = require('../mqtt/dynsec')
 
 async function deviceRoutes(app) {
 
@@ -111,13 +106,11 @@ async function deviceRoutes(app) {
     // Удалить использованный токен
     await db`DELETE FROM device_tokens WHERE code = ${code}`
 
-    // Обновить mosquitto
+    // Зарегистрировать устройство в Mosquitto Dynamic Security
     try {
-      await updateMosquittoPasswd(mqttUser, mqttPass)
-      await updateMosquittoAcl(mqttUser, macClean, mqtt_topic)
-      await reloadMosquitto()
+      await createDeviceClient(mqttUser, mqttPass, macClean, mqtt_topic)
     } catch (err) {
-      console.error('[mqtt] mosquitto update error:', err.message)
+      console.error('[mqtt] dynsec error:', err.message)
     }
 
     await db`
@@ -150,40 +143,6 @@ function generatePassword(len = 24) {
   let pass = ''
   for (let i = 0; i < len; i++) pass += chars[bytes[i] % chars.length]
   return pass
-}
-
-async function updateMosquittoPasswd(user, pass) {
-  execSync(`mosquitto_passwd -b ${MOSQUITTO_PASSWD} ${user} ${pass}`)
-}
-
-async function updateMosquittoAcl(user, macClean, mqttTopic) {
-  // Устройство:
-  //   читает  relay/{topic}/cmd    — входящие команды
-  //   пишет   relay/{topic}/status — статус всех реле (retained)
-  //   пишет   sys/devices/{mac}/status — LWT + online (retained)
-  const marker = `# Device ${macClean}`
-  const entry = `
-${marker}
-user ${user}
-topic read  relay/${mqttTopic}/cmd
-topic write relay/${mqttTopic}/status
-topic write sys/devices/${macClean}/status
-
-`
-  let content = ''
-  try { content = fs.readFileSync(MOSQUITTO_ACL, 'utf8') } catch { content = '' }
-
-  const idx = content.indexOf(marker)
-  if (idx >= 0) {
-    const next = content.indexOf('\n# Device ', idx + 1)
-    content = content.substring(0, idx) + (next >= 0 ? content.substring(next + 1) : '')
-  }
-
-  fs.writeFileSync(MOSQUITTO_ACL, content + entry)
-}
-
-async function reloadMosquitto() {
-  execSync(`docker kill --signal=HUP ${MOSQUITTO_CTR}`)
 }
 
 module.exports = deviceRoutes

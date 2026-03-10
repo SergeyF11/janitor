@@ -1,6 +1,7 @@
 'use strict'
 const mqtt = require('mqtt')
 const { getDb } = require('../db/connection')
+const dynsec = require('./dynsec')
 
 let client = null
 
@@ -23,8 +24,13 @@ async function connect() {
     rejectUnauthorized: process.env.MQTT_REJECT_UNAUTHORIZED !== 'false',
   })
 
-  client.on('connect', () => {
+  dynsec.setClient(client)
+
+  client.on('connect', async () => {
     console.log(`[mqtt] Connected to ${url}`)
+
+    // Убедиться что у бэкенда есть права на relay/+/cmd
+    try { await dynsec.ensureBackendRole(user) } catch (e) { console.error('[dynsec] ensureBackendRole:', e.message) }
 
     // Подписаться на статусы устройств (LWT + online) и статус реле
     client.subscribe('sys/devices/+/status', { qos: 1 })
