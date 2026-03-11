@@ -478,35 +478,49 @@ async function adminRoutes(app) {
   }, async (req, reply) => {
     const db      = getDb()
     const groupId = req.params.id
-    const relayIdx = req.body?.relay ?? 0
 
     await requireGroupAdmin(req, reply)
     if (reply.sent) return
 
+    // Найти группу и устройство привязанное к ней
     const [group] = await db`
-      SELECT id, mqtt_topic, relay_duration_ms FROM groups WHERE id = ${groupId}
+      SELECT g.id, g.name, g.mqtt_topic, g.relay_duration_ms,
+             dg.device_id, dg.relay_index
+      FROM groups g
+      LEFT JOIN device_groups dg ON dg.group_id = g.id
+      WHERE g.id = ${groupId}
+      LIMIT 1
     `
     if (!group) return reply.code(404).send({ error: 'not_found' })
+    if (!group.device_id) return reply.code(503).send({ error: 'no_device' })
 
-    let mqttAction, newState
+    // Определить действие
+    let action, newState
     if (group.relay_duration_ms === 0) {
       const [last] = await db`
         SELECT payload->>'state' as state FROM event_log
         WHERE group_id = ${groupId} AND action = 'relay_trigger'
         ORDER BY ts DESC LIMIT 1
       `
-      newState   = last?.state === 'on' ? 'off' : 'on'
-      mqttAction = { action: newState, relay: relayIdx }
+      newState = last?.state === 'on' ? 'off' : 'on'
+      action   = newState
     } else {
-      newState   = 'pulse'
-      mqttAction = { action: 'pulse', relay: relayIdx, duration: group.relay_duration_ms }
+      newState = 'pulse'
+      action   = 'pulse'
     }
 
-    const topic = `relay/${group.mqtt_topic}/cmd`
+    // Команда на устройство: {group, action, duration?}
+    const cmd = {
+      group:    group.mqtt_topic,
+      action,
+      ...(action === 'pulse' ? { duration: group.relay_duration_ms } : {}),
+    }
+
+    const topic = `$devices/${group.device_id}/commands`
     try {
       const mqttClient = app.mqtt
       if (mqttClient && mqttClient.connected) {
-        mqttClient.publish(topic, JSON.stringify(mqttAction), { qos: 1 })
+        mqttClient.publish(topic, JSON.stringify(cmd), { qos: 1 })
       }
     } catch (err) {
       console.error('[mqtt] publish error:', err.message)
@@ -515,9 +529,9 @@ async function adminRoutes(app) {
     await db`
       INSERT INTO event_log (actor_id, actor_login, action, group_id, payload)
       VALUES (${req.user.id}, ${req.user.login}, 'relay_trigger', ${groupId},
-              ${JSON.stringify({ ...mqttAction, state: newState, topic, by: 'admin' })})
+              ${JSON.stringify({ ...cmd, state: newState, device_id: group.device_id })})
     `
-    return { ok: true, state: newState, action: mqttAction }
+    return { ok: true, state: newState }
   })
 
   // POST /api/admin/groups/:id/device-token — генерация кода привязки ESP

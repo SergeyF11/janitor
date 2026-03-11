@@ -20,10 +20,13 @@
 
 #define CRYPTO_SALT       "JanitorSalt2024!"
 
+
 #ifdef ESP32
+  #define RESET_PIN RX
   #define LED_PIN         2
   #define LED_ACTIVE_LOW  false
 #else
+  #define RESET_PIN 3 // RX
   #define LED_PIN         LED_BUILTIN
   #define LED_ACTIVE_LOW  true
 #endif

@@ -4,7 +4,8 @@ import {
   getGroupUsers, getAdminUsers, createUser, addUserById, importUsersFromGroup,
   removeUserFromGroup, resetUserSessions, updateSingleSession, adminResetUserPassword,
   getGroupDevice, generateDeviceToken, adminTriggerRelay,
-  getGroupLogs, updateUserDescription
+  getGroupLogs, updateUserDescription,
+  mqttConnect, mqttDisconnect, isMqttConnected,
 } from '../api'
 
 export default function Main({ user, onLogout }) {
@@ -14,10 +15,12 @@ export default function Main({ user, onLogout }) {
   const [pressing, setPressing]       = useState({})
   const [statuses, setStatuses]       = useState({})
   const [showProfile, setShowProfile] = useState(false)
-  const [settingsGroup, setSettingsGroup] = useState(null)  // group object → открыть настройки
+  const [settingsGroup, setSettingsGroup] = useState(null)
+  const [mqttOnline, setMqttOnline]   = useState(false)
   const wsRef = useRef(null)
 
   const isAdmin = user?.role === 'admin'
+  const canPress = (group) => mqttOnline || navigator.onLine
 
   const loadData = useCallback(async () => {
     try {
@@ -41,6 +44,8 @@ export default function Main({ user, onLogout }) {
 
   useEffect(() => {
     loadData()
+
+    // WebSocket — статусы реле и устройств от бэкенда (если доступен)
     const ws = createWsConnection((msg) => {
       if (msg.type === 'relay_status') {
         setStatuses(s => ({ ...s, [msg.topic]: { ...s[msg.topic], state: msg.state } }))
@@ -52,16 +57,31 @@ export default function Main({ user, onLogout }) {
       }
     })
     wsRef.current = ws
-    return () => ws.close()
+
+    // MQTT — прямое подключение для кнопок
+    mqttConnect((connected) => setMqttOnline(connected))
+
+    return () => {
+      ws.close()
+      mqttDisconnect()
+    }
   }, [loadData])
 
   async function handleTrigger(group) {
     if (pressing[group.id]) return
+    // Кнопка недоступна если нет ни MQTT ни бэкенда
+    if (!mqttOnline && !navigator.onLine) return
     setPressing(p => ({ ...p, [group.id]: true }))
     try {
-      // Администраторы тоже могут жать кнопки через user endpoint
-      const result = await triggerRelay(group.id)
-      setStatuses(s => ({ ...s, [group.mqtt_topic]: { ...s[group.mqtt_topic], state: result.state } }))
+      const result = await triggerRelay(
+        group.id,
+        group.device_id,
+        group.mqtt_topic,
+        group.relay_duration_ms,
+      )
+      if (result?.state) {
+        setStatuses(s => ({ ...s, [group.mqtt_topic]: { ...s[group.mqtt_topic], state: result.state } }))
+      }
     } catch (err) {
       console.error('trigger error', err)
     } finally {
@@ -109,6 +129,10 @@ export default function Main({ user, onLogout }) {
             <div className="profile-login">
               {profile?.login}
               {isAdmin && <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text2)' }}>admin</span>}
+              <span
+                className={`mqtt-dot ${mqttOnline ? 'online' : 'offline'}`}
+                title={mqttOnline ? 'MQTT подключён' : 'MQTT недоступен'}
+              />
             </div>
             {profile?.display_name && <div className="profile-name">{profile.display_name}</div>}
             <div className="profile-id">
@@ -159,9 +183,10 @@ export default function Main({ user, onLogout }) {
                     isPulse ? 'relay-pulse' : (isOn ? 'relay-on' : 'relay-off'),
                     busy ? 'relay-busy' : '',
                     !online ? 'relay-offline' : '',
+                    !canPress(group) ? 'relay-unavailable' : '',
                   ].join(' ')}
                   onClick={() => handleTrigger(group)}
-                  disabled={busy}
+                  disabled={busy || !canPress(group)}
                 >
                   {busy ? (
                     <span className="relay-btn-spinner" />

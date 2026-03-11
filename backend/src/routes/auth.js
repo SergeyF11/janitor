@@ -37,7 +37,7 @@ async function authRoutes(app) {
       }
     }
   }, async (req, reply) => {
-    const { login, password, fingerprint = null } = req.body
+    const { login, password, fingerprint } = req.body
     const ip        = req.ip
     const userAgent = req.headers['user-agent'] || ''
 
@@ -50,18 +50,19 @@ async function authRoutes(app) {
       return {
         accessToken: result.accessToken,
         user:        result.user,
+        mqtt:        result.mqtt,
       }
     } catch (err) {
       if (err.message === 'session_exists') {
         return reply.code(403).send({ error: 'session_exists' })
       }
-      if (err.message === 'device_mismatch') {
-        return reply.code(403).send({ error: 'device_mismatch' })
-      }
       if (err.message === 'user_inactive') {
         return reply.code(403).send({ error: 'user_inactive' })
       }
-      return reply.code(401).send({ error: 'invalid_credentials' })
+      if (err.message === 'device_mismatch') {
+        return reply.code(403).send({ error: 'device_mismatch' })
+      }
+      return reply.code(401).send({ error: "invalid_credentials" })
     }
   })
 
@@ -81,7 +82,7 @@ async function authRoutes(app) {
       const result = await refreshTokens(token, ip, userAgent, app)
 
       // Обновляем cookie с новым refresh токеном
-      reply.setCookie(REFRESH_COOKIE, result.newRefreshToken, cookieOpts(36500))
+      reply.setCookie(REFRESH_COOKIE, result.newRefreshToken, cookieOpts(90))
 
       return {
         accessToken: result.accessToken,
@@ -159,7 +160,7 @@ async function authRoutes(app) {
     const newRefreshToken = await issueRefreshToken(user.id, ip, userAgent)
     const accessToken     = app.jwt.sign(buildJwtPayload(user), { expiresIn: '15m' })
 
-    reply.setCookie(REFRESH_COOKIE, newRefreshToken, cookieOpts(36500))
+    reply.setCookie(REFRESH_COOKIE, newRefreshToken, cookieOpts(90))
 
     return {
       ok: true,

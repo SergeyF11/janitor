@@ -26,15 +26,22 @@ async function connect() {
 
   dynsec.setClient(client)
 
+  let backendRoleReady = false
+
   client.on('connect', async () => {
     console.log(`[mqtt] Connected to ${url}`)
 
-    // Убедиться что у бэкенда есть права на relay/+/cmd
-    try { await dynsec.ensureBackendRole(user) } catch (e) { console.error('[dynsec] ensureBackendRole:', e.message) }
+    // Подписаться на события всех устройств
+    client.subscribe('$devices/+/events', { qos: 1 })
 
-    // Подписаться на статусы устройств (LWT + online) и статус реле
-    client.subscribe('sys/devices/+/status', { qos: 1 })
-    client.subscribe('relay/+/status',       { qos: 1 })
+    // Убедиться что у бэкенда есть права — только один раз, в фоне
+    if (!backendRoleReady) {
+      backendRoleReady = true  // сразу ставим флаг чтобы не запускать повторно
+      dynsec.ensureBackendRole(user).catch(e => {
+        backendRoleReady = false  // сбросить если не удалось
+        console.error('[dynsec] ensureBackendRole:', e.message)
+      })
+    }
   })
 
   client.on('message', async (topic, payload) => {
@@ -59,38 +66,50 @@ async function connect() {
 async function handleMessage(topic, payload) {
   const db = getDb()
 
-  // sys/devices/<MAC>/status — online при подключении, offline по LWT
-  const statusMatch = topic.match(/^sys\/devices\/([^/]+)\/status$/)
-  if (statusMatch) {
-    const deviceId = statusMatch[1]
-    let online = true
-    let fwVersion = null
-    try {
-      const data = JSON.parse(payload)
-      online    = data.online !== false   // false только если явно {"online":false}
-      fwVersion = data.fw_version || null
-    } catch {}
+  // $devices/<MAC>/events — все события от ESP
+  const eventsMatch = topic.match(/^\$devices\/([^/]+)\/events$/)
+  if (!eventsMatch) return
 
+  const macClean = eventsMatch[1]
+  let data
+  try { data = JSON.parse(payload) } catch { return }
+
+  // LWT или явный offline: {online: false}
+  if (data.online === false) {
     await db`
-      UPDATE devices
-      SET is_online  = ${online},
-          last_seen  = CASE WHEN ${online} THEN NOW() ELSE last_seen END,
-          fw_version = COALESCE(${fwVersion}, fw_version)
-      WHERE device_id = ${deviceId}
+      UPDATE devices SET is_online = false WHERE device_id = ${macClean}
     `
-    broadcastDeviceStatus(deviceId, online)
+    broadcastDeviceStatus(macClean, false)
     return
   }
 
-  // relay/<topic>/status — подтверждение выполнения команды от ESP
-  const relayMatch = topic.match(/^relay\/([^/]+)\/status$/)
-  if (relayMatch) {
-    const mqttTopic = relayMatch[1]
-    try {
-      const data = JSON.parse(payload)
-      // Найти группу по mqtt_topic и оповестить WebSocket
-      broadcastRelayStatus(mqttTopic, data)
-    } catch {}
+  // Online + полный статус при подключении: {online: true, relays: [{group, state}, ...]}
+  if (data.online === true) {
+    await db`
+      UPDATE devices
+      SET is_online  = true,
+          last_seen  = NOW(),
+          fw_version = COALESCE(${data.fw || null}, fw_version)
+      WHERE device_id = ${macClean}
+    `
+    broadcastDeviceStatus(macClean, true)
+
+    // Разослать статус каждой группы
+    if (Array.isArray(data.relays)) {
+      for (const r of data.relays) {
+        broadcastRelayStatus(r.group, r.state)
+      }
+    }
+    return
+  }
+
+  // Изменение состояния реле: [{group, state, ts}, ...]
+  if (Array.isArray(data)) {
+    await db`UPDATE devices SET last_seen = NOW() WHERE device_id = ${macClean}`
+    for (const r of data) {
+      broadcastRelayStatus(r.group, r.state)
+    }
+    return
   }
 }
 

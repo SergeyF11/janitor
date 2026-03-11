@@ -28,7 +28,7 @@ async function migrate() {
   await db.unsafe(`
     CREATE TABLE users (
       id                   UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-      login                VARCHAR(100) NOT NULL,
+      login                VARCHAR(100) NOT NULL UNIQUE,
       password_hash        TEXT         NOT NULL,
       display_name         VARCHAR(200),
       phone                VARCHAR(50),
@@ -38,19 +38,12 @@ async function migrate() {
       must_change_password BOOLEAN      NOT NULL DEFAULT true,
       is_active            BOOLEAN      NOT NULL DEFAULT true,
       token_version        INTEGER      NOT NULL DEFAULT 0,
-      created_by           UUID         REFERENCES users(id) ON DELETE SET NULL,
       device_fingerprint   TEXT,
+      mqtt_password        TEXT,
+      created_by           UUID         REFERENCES users(id) ON DELETE SET NULL,
       created_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
       updated_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     );
-  `)
-
-  // Логин уникален глобально только для admin/superadmin.
-  // Для role=user уникальность в пределах группы контролируется в коде.
-  await db.unsafe(`
-    CREATE UNIQUE INDEX idx_users_login_staff
-    ON users(login)
-    WHERE role IN ('superadmin', 'admin');
   `)
 
   // Скользящее окно 90 дней: каждое использование продлевает срок
@@ -59,7 +52,7 @@ async function migrate() {
       id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       token_hash   TEXT        NOT NULL UNIQUE,
-      expires_at   TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '36500 days',
+      expires_at   TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '90 days',
       created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       last_used_at TIMESTAMPTZ,
       ip           VARCHAR(50),
@@ -120,8 +113,10 @@ async function migrate() {
     CREATE TABLE devices (
       device_id      VARCHAR(50)  PRIMARY KEY,
       mqtt_user      VARCHAR(100) NOT NULL UNIQUE,
-      mqtt_pass_hash TEXT         NOT NULL,
+      mqtt_password  TEXT         NOT NULL,
+      yandex_device_id VARCHAR(100),
       fw_version     VARCHAR(50),
+      is_online      BOOLEAN      NOT NULL DEFAULT false,
       last_seen      TIMESTAMPTZ,
       registered_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     );
@@ -174,7 +169,7 @@ async function migrate() {
       ${process.env.SUPERADMIN_LOGIN || 'superadmin'},
       ${hash}, 'superadmin', false, false, 0
     )
-    ON CONFLICT ON CONSTRAINT idx_users_login_staff DO NOTHING
+    ON CONFLICT (login) DO NOTHING
   `
 
   console.log('[db] Migration complete ✓')

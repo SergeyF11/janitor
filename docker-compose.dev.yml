@@ -119,6 +119,7 @@ services:
     ports:
       - "8883:8883"      # TLS наружу — для ESP устройств
       - "1883:1883"      # 1883 только внутри сети — не публикуем наружу!
+      - "9001:9001"    # WebSocket для PWA
     volumes:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data

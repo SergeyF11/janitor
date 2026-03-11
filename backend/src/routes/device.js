@@ -84,13 +84,13 @@ async function deviceRoutes(app) {
 
     // Upsert device
     await db`
-      INSERT INTO devices (device_id, mqtt_user, mqtt_pass_hash, fw_version, registered_at)
+      INSERT INTO devices (device_id, mqtt_user, mqtt_password, fw_version, registered_at)
       VALUES (${macClean}, ${mqttUser}, ${mqttPass}, ${fw_version || null}, NOW())
       ON CONFLICT (device_id) DO UPDATE
-        SET mqtt_user      = ${mqttUser},
-            mqtt_pass_hash = ${mqttPass},
-            fw_version     = COALESCE(${fw_version || null}, devices.fw_version),
-            registered_at  = NOW()
+        SET mqtt_user     = ${mqttUser},
+            mqtt_password = ${mqttPass},
+            fw_version    = COALESCE(${fw_version || null}, devices.fw_version),
+            registered_at = NOW()
     `
 
     // Привязать все реле устройства к одной группе
@@ -108,7 +108,7 @@ async function deviceRoutes(app) {
 
     // Зарегистрировать устройство в Mosquitto Dynamic Security
     try {
-      await createDeviceClient(mqttUser, mqttPass, macClean, mqtt_topic)
+      await createDeviceClient(mqttUser, mqttPass, macClean)
     } catch (err) {
       console.error('[mqtt] dynsec error:', err.message)
     }
@@ -125,13 +125,26 @@ async function deviceRoutes(app) {
               })})
     `
 
+    // Получить все группы устройства (могут быть уже ранее привязанные)
+    const deviceGroups = await db`
+      SELECT dg.relay_index, g.mqtt_topic
+      FROM device_groups dg
+      JOIN groups g ON g.id = dg.group_id
+      WHERE dg.device_id = ${macClean}
+      ORDER BY dg.relay_index
+    `
+
     return {
-      ok:         true,
-      mqtt_host:  process.env.MQTT_HOST || 'smilart.ru',
-      mqtt_port:  parseInt(process.env.MQTT_PORT || '8883'),
-      mqtt_user:  mqttUser,
-      mqtt_pass:  mqttPass,
-      mqtt_topic, // один топик для всех реле
+      ok:           true,
+      mqtt_host:    process.env.MQTT_ESP_HOST || process.env.MQTT_HOST || 'smilart.ru',
+      mqtt_port:    parseInt(process.env.MQTT_ESP_PORT || process.env.MQTT_PORT || '8883'),
+      mqtt_user:    mqttUser,
+      mqtt_pass:    mqttPass,
+      device_id:    macClean,
+      topic_cmd:    `$devices/${macClean}/commands`,
+      topic_events: `$devices/${macClean}/events`,
+      // Список реле и их групп — ESP использует для маппинга команд
+      relays: deviceGroups.map(r => ({ relay_index: r.relay_index, group: r.mqtt_topic })),
     }
   })
 }

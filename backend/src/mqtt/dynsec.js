@@ -4,7 +4,6 @@ const CONTROL_TOPIC  = '$CONTROL/dynamic-security/v1'
 const RESPONSE_TOPIC = '$CONTROL/dynamic-security/v1/response'
 const TIMEOUT_MS     = 5000
 
-// Клиент передаётся снаружи — нет циклической зависимости
 let _client = null
 function setClient(c) { _client = c }
 
@@ -40,25 +39,32 @@ function dynsecCommand(command, payload = {}) {
   })
 }
 
+// ── Бэкенд ────────────────────────────────────────────────────
+// Вызывается при старте — бэкенд читает события всех устройств
+// и публикует команды на устройства
 async function ensureBackendRole(mqttUser) {
   const rolename = 'role_backend'
+  // Создаём роль если не существует (ошибка "already exists" игнорируется)
   try {
     await dynsecCommand('createRole', {
       rolename,
       acls: [
-        { acltype: 'publishClientSend',    topic: 'relay/+/cmd',          allow: true },
-        { acltype: 'subscribeLiteral',     topic: 'relay/+/status',       allow: true },
-        { acltype: 'publishClientReceive', topic: 'relay/+/status',       allow: true },
-        { acltype: 'subscribeLiteral',     topic: 'sys/devices/+/status', allow: true },
-        { acltype: 'publishClientReceive', topic: 'sys/devices/+/status', allow: true },
+        { acltype: 'subscribePattern',     topic: '$devices/+/events',   allow: true },
+        { acltype: 'publishClientReceive', topic: '$devices/+/events',   allow: true },
+        { acltype: 'publishClientSend',    topic: '$devices/+/commands', allow: true },
       ],
     })
-  } catch {}
+  } catch (e) {
+    // "Role already exists" — нормально, роль уже есть
+    if (!e.message.includes('already exists')) throw e
+  }
   try { await dynsecCommand('addClientRole', { username: mqttUser, rolename, priority: 1 }) } catch {}
   console.log(`[dynsec] Backend role ensured for ${mqttUser}`)
 }
 
-async function createDeviceClient(mqttUser, mqttPass, macClean, mqttTopic) {
+// ── ESP устройство ────────────────────────────────────────────
+// Устройство получает команды и публикует события только по своему MAC
+async function createDeviceClient(mqttUser, mqttPass, macClean) {
   try { await dynsecCommand('deleteClient', { username: mqttUser }) } catch {}
 
   await dynsecCommand('createClient', {
@@ -69,20 +75,74 @@ async function createDeviceClient(mqttUser, mqttPass, macClean, mqttTopic) {
   })
 
   const rolename = `role_esp_${macClean}`
-  try {
-    await dynsecCommand('createRole', {
-      rolename,
-      acls: [
-        { acltype: 'subscribeLiteral',     topic: `relay/${mqttTopic}/cmd`,         allow: true },
-        { acltype: 'publishClientReceive', topic: `relay/${mqttTopic}/cmd`,         allow: true },
-        { acltype: 'publishClientSend',    topic: `relay/${mqttTopic}/status`,      allow: true },
-        { acltype: 'publishClientSend',    topic: `sys/devices/${macClean}/status`, allow: true },
-      ],
-    })
-  } catch {}
+  try { await dynsecCommand('deleteRole', { rolename }) } catch {}
+
+  await dynsecCommand('createRole', {
+    rolename,
+    acls: [
+      // Получать команды
+      { acltype: 'subscribeLiteral',     topic: `$devices/${macClean}/commands`, allow: true },
+      { acltype: 'publishClientReceive', topic: `$devices/${macClean}/commands`, allow: true },
+      // Публиковать события (статусы, LWT)
+      { acltype: 'publishClientSend',    topic: `$devices/${macClean}/events`,   allow: true },
+    ],
+  })
 
   await dynsecCommand('addClientRole', { username: mqttUser, rolename, priority: -1 })
   console.log(`[dynsec] Device client created: ${mqttUser}`)
+}
+
+// ── Пользователь PWA ──────────────────────────────────────────
+// Пользователь может только публиковать команды на устройства своих групп.
+// deviceIds — массив MAC устройств привязанных к группам пользователя.
+async function createUserClient(mqttUser, mqttPass, deviceIds = []) {
+  // Удалить старого клиента если есть
+  try { await dynsecCommand('deleteClient', { username: mqttUser }) } catch {}
+
+  await dynsecCommand('createClient', {
+    username: mqttUser,
+    password: mqttPass,
+    textname: `User ${mqttUser}`,
+    roles:    [],
+  })
+
+  const rolename = `role_user_${mqttUser}`
+  try { await dynsecCommand('deleteRole', { rolename }) } catch {}
+
+  // ACL — только publishClientSend на команды своих устройств
+  const acls = deviceIds.map(mac => ({
+    acltype: 'publishClientSend',
+    topic:   `$devices/${mac}/commands`,
+    allow:   true,
+  }))
+
+  if (acls.length > 0) {
+    await dynsecCommand('createRole', { rolename, acls })
+    await dynsecCommand('addClientRole', { username: mqttUser, rolename, priority: -1 })
+  } else {
+    // Нет устройств — создать роль без ACL (пользователь не сможет ничего)
+    await dynsecCommand('createRole', { rolename, acls: [] })
+    await dynsecCommand('addClientRole', { username: mqttUser, rolename, priority: -1 })
+  }
+
+  console.log(`[dynsec] User client created: ${mqttUser} (${deviceIds.length} devices)`)
+}
+
+// ── Обновить устройства пользователя ─────────────────────────
+// Вызывается когда пользователя добавляют/удаляют из группы
+async function updateUserDevices(mqttUser, deviceIds = []) {
+  const rolename = `role_user_${mqttUser}`
+  try { await dynsecCommand('deleteRole', { rolename }) } catch {}
+
+  const acls = deviceIds.map(mac => ({
+    acltype: 'publishClientSend',
+    topic:   `$devices/${mac}/commands`,
+    allow:   true,
+  }))
+
+  await dynsecCommand('createRole', { rolename, acls })
+  try { await dynsecCommand('addClientRole', { username: mqttUser, rolename, priority: -1 }) } catch {}
+  console.log(`[dynsec] User devices updated: ${mqttUser} (${deviceIds.length} devices)`)
 }
 
 async function deleteDeviceClient(mqttUser, macClean) {
@@ -91,4 +151,19 @@ async function deleteDeviceClient(mqttUser, macClean) {
   try { await dynsecCommand('deleteClient',      { username: mqttUser }) } catch {}
 }
 
-module.exports = { setClient, createDeviceClient, deleteDeviceClient, ensureBackendRole }
+async function deleteUserClient(mqttUser) {
+  const rolename = `role_user_${mqttUser}`
+  try { await dynsecCommand('removeClientRole', { username: mqttUser, rolename }) } catch {}
+  try { await dynsecCommand('deleteRole',        { rolename }) } catch {}
+  try { await dynsecCommand('deleteClient',      { username: mqttUser }) } catch {}
+}
+
+module.exports = {
+  setClient,
+  ensureBackendRole,
+  createDeviceClient,
+  deleteDeviceClient,
+  createUserClient,
+  updateUserDevices,
+  deleteUserClient,
+}

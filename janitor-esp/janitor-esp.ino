@@ -28,11 +28,6 @@
 DeviceConfig cfg;
 DeviceState  state = STATE_PORTAL;
 
-#ifdef ESP32
-  #define RESET_PIN RX
-#else
-  #define RESET_PIN RX
-#endif
 
 bool needPortal() {
   if (!LittleFS.exists(CONFIG_FILE)) return true;

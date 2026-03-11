@@ -2,6 +2,7 @@
 const bcrypt = require('bcryptjs')
 const crypto = require('crypto')
 const { getDb } = require('../db/connection')
+const dynsec = require('../mqtt/dynsec')
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex')
@@ -76,7 +77,8 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
     // Попытка 1: user@mqtt_topic
     const [userRow] = await db`
       SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
-             u.must_change_password, u.is_active, u.token_version, u.device_fingerprint
+             u.must_change_password, u.is_active, u.token_version,
+             u.device_fingerprint, u.mqtt_password
       FROM users u
       JOIN user_groups ug ON ug.user_id = u.id
       JOIN groups g       ON g.id = ug.group_id
@@ -87,24 +89,28 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
         AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
       LIMIT 1
     `
+    console.log('[debug] userRow:', userRow ? userRow.login : 'null', 'login:', login, 'groupTopic:', groupTopic)
     if (userRow) {
       user = userRow
     } else {
       // Попытка 2: admin@something — полный логин как есть
       const [adminRow] = await db`
         SELECT id, login, password_hash, role, single_session,
-               must_change_password, is_active, token_version, device_fingerprint
+               must_change_password, is_active, token_version,
+               device_fingerprint, mqtt_password
         FROM users
         WHERE login = ${loginStr}
           AND role IN ('admin', 'superadmin')
       `
+      console.log('[debug] adminRow:', adminRow ? adminRow.login : 'null')
       user = adminRow
     }
   } else {
     // Без @ — только admin/superadmin
     const [row] = await db`
       SELECT id, login, password_hash, role, single_session,
-             must_change_password, is_active, token_version, device_fingerprint
+             must_change_password, is_active, token_version,
+             device_fingerprint, mqtt_password
       FROM users
       WHERE login = ${loginStr}
         AND role IN ('admin', 'superadmin')
@@ -118,26 +124,72 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
   const valid = await bcrypt.compare(password, user.password_hash)
   if (!valid) throw new Error('invalid_credentials')
 
-  // single_session: проверка привязки к устройству
+  // single_session: если уже есть активная сессия — отказать
+  // Сначала чистим токены выданные до смены token_version (невалидные)
   if (user.single_session) {
-    if (user.device_fingerprint) {
-      // Устройство уже привязано
-      if (fingerprint && user.device_fingerprint !== fingerprint) {
-        throw new Error('device_mismatch')
-      }
-      // Проверить нет ли активной сессии на другом устройстве
-      const [existing] = await db`
-        SELECT id FROM refresh_tokens
-        WHERE user_id = ${user.id} AND expires_at > NOW()
-        LIMIT 1
-      `
-      if (existing) throw new Error('session_exists')
-    } else if (fingerprint) {
+    await db`
+      DELETE FROM refresh_tokens
+      WHERE user_id = ${user.id}
+        AND created_at < (
+          SELECT updated_at FROM users WHERE id = ${user.id}
+        )
+    `
+    const [existing] = await db`
+      SELECT id FROM refresh_tokens
+      WHERE user_id = ${user.id} AND expires_at > NOW()
+      LIMIT 1
+    `
+    if (existing) throw new Error('session_exists')
+  }
+
+  // ── Device fingerprint ──────────────────────────────────────
+  // Только для пользователей и single_session админов, не для суперадмина
+  const needsFingerprint = user.role === 'user' || (user.role === 'admin' && user.single_session)
+  if (needsFingerprint && fingerprint) {
+    if (!user.device_fingerprint) {
       // Первый вход — привязать устройство
-      await db`
-        UPDATE users SET device_fingerprint = ${fingerprint}, updated_at = NOW()
-        WHERE id = ${user.id}
-      `
+      await db`UPDATE users SET device_fingerprint = ${fingerprint}, updated_at = NOW() WHERE id = ${user.id}`
+      user.device_fingerprint = fingerprint
+    } else if (user.device_fingerprint !== fingerprint) {
+      throw new Error('device_mismatch')
+    }
+  }
+
+  // ── MQTT credentials ─────────────────────────────────────────
+  // Только для пользователей и одиночных-сессионных админов
+  let mqttCreds = null
+  if (user.role === 'user' || (user.role === 'admin' && user.single_session)) {
+    let mqttPass = user.mqtt_password
+    const mqttUser = `u_${user.id.replace(/-/g, '').substring(0, 16)}`
+
+    if (!mqttPass) {
+      // Первый логин — сгенерировать и сохранить
+      mqttPass = generateMqttPassword()
+      await db`UPDATE users SET mqtt_password = ${mqttPass}, updated_at = NOW() WHERE id = ${user.id}`
+    }
+
+    // Получить устройства групп пользователя
+    const devices = await db`
+      SELECT DISTINCT dg.device_id
+      FROM user_groups ug
+      JOIN device_groups dg ON dg.group_id = ug.group_id
+      WHERE ug.user_id = ${user.id}
+    `
+    const deviceIds = devices.map(d => d.device_id)
+
+    // Создать/обновить MQTT клиента в dynsec
+    try {
+      await dynsec.createUserClient(mqttUser, mqttPass, deviceIds)
+    } catch (e) {
+      console.error('[dynsec] createUserClient error:', e.message)
+    }
+
+    const mqttHost = process.env.MQTT_WS_HOST || 'ws://localhost:9001'
+    mqttCreds = {
+      host:     mqttHost,
+      username: mqttUser,
+      password: mqttPass,
+      devices:  deviceIds,
     }
   }
 
@@ -152,6 +204,7 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
   return {
     accessToken,
     refreshToken,
+    mqtt: mqttCreds,
     user: {
       id:                   user.id,
       login:                user.login,
@@ -225,7 +278,8 @@ async function resetUserSessions(targetId, actorId) {
 
   await db`DELETE FROM refresh_tokens WHERE user_id = ${targetId}`
   // Инкремент token_version инвалидирует все выданные access токены
-  // Сброс device_fingerprint — следующий вход возможен с любого устройства
+  // device_fingerprint сбрасывается — следующий вход разрешён только с нового устройства
+  // mqtt_password НЕ сбрасывается — PWA сохраняет MQTT соединение
   await db`
     UPDATE users SET token_version = token_version + 1,
                      device_fingerprint = NULL,
