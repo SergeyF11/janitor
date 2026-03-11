@@ -1,4 +1,14 @@
 'use strict'
+
+function generateMqttPassword(len) {
+  len = len || 24
+  var crypto = require('crypto')
+  var chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
+  var bytes = crypto.randomBytes(len)
+  var pass = ''
+  for (var i = 0; i < len; i++) pass += chars[bytes[i] % chars.length]
+  return pass
+}
 const bcrypt = require('bcryptjs')
 const crypto = require('crypto')
 const { getDb } = require('../db/connection')
