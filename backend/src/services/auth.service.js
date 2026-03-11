@@ -2,7 +2,6 @@
 const bcrypt = require('bcryptjs')
 const crypto = require('crypto')
 const { getDb } = require('../db/connection')
-const dynsec = require('../mqtt/dynsec')
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex')
@@ -124,22 +123,23 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
   const valid = await bcrypt.compare(password, user.password_hash)
   if (!valid) throw new Error('invalid_credentials')
 
-  // single_session: если уже есть активная сессия — отказать
-  // Сначала чистим токены выданные до смены token_version (невалидные)
+  // single_session: одна активная сессия — удаляем все старые перед созданием новой
+  // Исключение: если токен создан в последние 5 секунд (защита от двойного рендера React)
   if (user.single_session) {
-    await db`
-      DELETE FROM refresh_tokens
-      WHERE user_id = ${user.id}
-        AND created_at < (
-          SELECT updated_at FROM users WHERE id = ${user.id}
-        )
-    `
     const [existing] = await db`
       SELECT id FROM refresh_tokens
-      WHERE user_id = ${user.id} AND expires_at > NOW()
+      WHERE user_id = ${user.id}
+        AND expires_at > NOW()
+        AND created_at < NOW() - INTERVAL '5 seconds'
       LIMIT 1
     `
     if (existing) throw new Error('session_exists')
+    // Чистим дубликаты от React StrictMode
+    await db`
+      DELETE FROM refresh_tokens
+      WHERE user_id = ${user.id}
+        AND expires_at > NOW()
+    `
   }
 
   // ── Device fingerprint ──────────────────────────────────────
