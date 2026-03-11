@@ -82,7 +82,6 @@ public:
     return true;
   }
 
-  // Полная загрузка (main + relay)
   bool loadConfig(DeviceConfig& cfg) {
     _setDefaults(cfg);
     loadMainConfig(cfg);
@@ -90,12 +89,10 @@ public:
     return true;
   }
 
-  // Полное сохранение
   bool saveConfig(const DeviceConfig& cfg) {
     return saveMainConfig(cfg) && saveRelayConfig(cfg);
   }
 
-  // ── Основной конфиг: WiFi + MQTT + код привязки ───────────
   bool loadMainConfig(DeviceConfig& cfg) {
     if (!LittleFS.exists(CONFIG_FILE)) return false;
     File f = LittleFS.open(CONFIG_FILE, "r");
@@ -114,7 +111,8 @@ public:
     return true;
   }
 
-  // ── Конфиг реле: пины, имена ─────────────────────────────
+  // ── Конфиг реле: пины, active_low, имена ──────────────────
+  // Имя реле = mqtt_topic группы (задаётся пользователем в портале)
   bool loadRelayConfig(DeviceConfig& cfg) {
     if (!LittleFS.exists(RELAY_FILE)) return false;
     File f = LittleFS.open(RELAY_FILE, "r");
@@ -133,7 +131,6 @@ public:
     return true;
   }
 
-  // ── Сброс ─────────────────────────────────────────────────
   void resetAll() {
     LittleFS.remove(CONFIG_FILE);
     LittleFS.remove(RELAY_FILE);
@@ -145,13 +142,12 @@ public:
     memset(cfg.mqtt_host,  0, sizeof(cfg.mqtt_host));
     memset(cfg.mqtt_user,  0, sizeof(cfg.mqtt_user));
     memset(cfg.mqtt_pass,  0, sizeof(cfg.mqtt_pass));
-    memset(cfg.mqtt_topic, 0, sizeof(cfg.mqtt_topic));
+    memset(cfg.device_id,  0, sizeof(cfg.device_id));
     memset(cfg.reg_code,   0, sizeof(cfg.reg_code));
     saveMainConfig(cfg);
     Serial.println(F("[FS] Registration reset"));
   }
 
-  // ── Сертификат ────────────────────────────────────────────
   bool hasCert() { return LittleFS.exists(CERT_FILE); }
 
   bool loadCert(uint8_t** buf, size_t* len) {
@@ -173,7 +169,7 @@ private:
     cfg.registered = false;
     cfg.relays[0].pin        = 5;
     cfg.relays[0].active_low = true;
-    strlcpy(cfg.relays[0].name, "Relay 1", sizeof(cfg.relays[0].name));
+    strlcpy(cfg.relays[0].name, "relay1", sizeof(cfg.relays[0].name));
     for (uint8_t i = 1; i < MAX_RELAYS; i++)
       cfg.relays[i].pin = (uint8_t)NOT_A_PIN;
   }
@@ -181,16 +177,16 @@ private:
   bool _parseMain(const String& json, DeviceConfig& cfg) {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return false;
-    strlcpy(cfg.wifi1_ssid,  doc["w1s"] | "", sizeof(cfg.wifi1_ssid));
-    strlcpy(cfg.wifi1_psk,   doc["w1p"] | "", sizeof(cfg.wifi1_psk));
-    strlcpy(cfg.wifi2_ssid,  doc["w2s"] | "", sizeof(cfg.wifi2_ssid));
-    strlcpy(cfg.wifi2_psk,   doc["w2p"] | "", sizeof(cfg.wifi2_psk));
-    strlcpy(cfg.mqtt_host,   doc["mh"]  | "", sizeof(cfg.mqtt_host));
+    strlcpy(cfg.wifi1_ssid, doc["w1s"] | "", sizeof(cfg.wifi1_ssid));
+    strlcpy(cfg.wifi1_psk,  doc["w1p"] | "", sizeof(cfg.wifi1_psk));
+    strlcpy(cfg.wifi2_ssid, doc["w2s"] | "", sizeof(cfg.wifi2_ssid));
+    strlcpy(cfg.wifi2_psk,  doc["w2p"] | "", sizeof(cfg.wifi2_psk));
+    strlcpy(cfg.mqtt_host,  doc["mh"]  | "", sizeof(cfg.mqtt_host));
     cfg.mqtt_port = doc["mp"] | MQTT_PORT_TLS;
-    strlcpy(cfg.mqtt_user,   doc["mu"]  | "", sizeof(cfg.mqtt_user));
-    strlcpy(cfg.mqtt_pass,   doc["mps"] | "", sizeof(cfg.mqtt_pass));
-    strlcpy(cfg.mqtt_topic,  doc["mt"]  | "", sizeof(cfg.mqtt_topic));
-    strlcpy(cfg.reg_code,    doc["rc"]  | "", sizeof(cfg.reg_code));
+    strlcpy(cfg.mqtt_user,  doc["mu"]  | "", sizeof(cfg.mqtt_user));
+    strlcpy(cfg.mqtt_pass,  doc["mps"] | "", sizeof(cfg.mqtt_pass));
+    strlcpy(cfg.device_id,  doc["did"] | "", sizeof(cfg.device_id));
+    strlcpy(cfg.reg_code,   doc["rc"]  | "", sizeof(cfg.reg_code));
     cfg.registered = doc["reg"] | false;
     cfg.tls_secure = doc["tls"] | false;
     strlcpy(cfg.tz, doc["tz"] | "", sizeof(cfg.tz));
@@ -207,7 +203,7 @@ private:
     doc["mp"]  = cfg.mqtt_port;
     doc["mu"]  = cfg.mqtt_user;
     doc["mps"] = cfg.mqtt_pass;
-    doc["mt"]  = cfg.mqtt_topic;
+    doc["did"] = cfg.device_id;
     doc["rc"]  = cfg.reg_code;
     doc["reg"] = cfg.registered;
     doc["tls"] = cfg.tls_secure;
@@ -226,7 +222,7 @@ private:
       if (idx >= MAX_RELAYS) continue;
       cfg.relays[idx].pin        = r["p"]  | (uint8_t)NOT_A_PIN;
       cfg.relays[idx].active_low = r["al"] | true;
-      strlcpy(cfg.relays[idx].name, r["n"] | "Relay", sizeof(cfg.relays[idx].name));
+      strlcpy(cfg.relays[idx].name, r["n"] | "relay", sizeof(cfg.relays[idx].name));
     }
     return true;
   }
@@ -240,7 +236,7 @@ private:
       r["i"]  = i;
       r["p"]  = cfg.relays[i].pin;
       r["al"] = cfg.relays[i].active_low;
-      r["n"]  = cfg.relays[i].name;
+      r["n"]  = cfg.relays[i].name;  // имя = mqtt_topic группы
     }
     String out; serializeJson(doc, out);
     return out;

@@ -31,20 +31,21 @@ public:
     });
     _mqtt.setKeepAlive(60);
     _mqtt.setSocketTimeout(10);
+    _mqtt.setBufferSize(512);
     return true;
   }
 
-  // ── Регистрация УСТРОЙСТВА одним запросом ─────────────────
-  // Отправляет: mac, код привязки, список всех реле с пинами.
-  // Получает:   mqtt_host, mqtt_port, mqtt_user, mqtt_pass, mqtt_topic.
-  // Все реле устройства получают ОДИН общий топик.
+  // ── Регистрация устройства ────────────────────────────────
+  // Отправляет: mac, код, список реле с именами
+  // Получает:   mqtt_host, mqtt_port, mqtt_user, mqtt_pass, device_id
+  // Имена реле задаются пользователем в портале и должны совпадать
+  // с mqtt_topic групп на сервере
   bool registerDevice() {
     if (!cfg()->hasPendingCode()) {
       Serial.println(F("[REG] No pending code"));
       return false;
     }
 
-    // Собираем список реле
     JsonDocument req;
     req["mac"]        = WiFi.macAddress();
     req["fw_version"] = FW_VERSION;
@@ -55,7 +56,7 @@ public:
       JsonObject r = relays.createNestedObject();
       r["index"] = i;
       r["pin"]   = cfg()->relays[i].pin;
-      r["name"]  = cfg()->relays[i].name;
+      r["name"]  = cfg()->relays[i].name;  // имя = mqtt_topic группы
     }
 
     String body; serializeJson(req, body);
@@ -85,31 +86,36 @@ public:
       return false;
     }
 
-    // Сохраняем всё что пришло с сервера
-    const char* host  = doc["mqtt_host"] | "";
-    const char* topic = doc["mqtt_topic"] | "";
+    const char* host     = doc["mqtt_host"]  | "";
+    const char* deviceId = doc["device_id"]  | "";
+    const char* mqttUser = doc["mqtt_user"]  | "";
+    const char* mqttPass = doc["mqtt_pass"]  | "";
 
-    if (!strlen(host) || !strlen(topic)) {
-      Serial.println(F("[REG] Response missing mqtt_host or mqtt_topic"));
+    if (!strlen(host) || !strlen(deviceId)) {
+      Serial.println(F("[REG] Response missing mqtt_host or device_id"));
       return false;
     }
 
-    strlcpy(cfg()->mqtt_host,  host,                    sizeof(cfg()->mqtt_host));
-    cfg()->mqtt_port = doc["mqtt_port"] | MQTT_PORT_TLS;
-    strlcpy(cfg()->mqtt_user,  doc["mqtt_user"] | "",   sizeof(cfg()->mqtt_user));
-    strlcpy(cfg()->mqtt_pass,  doc["mqtt_pass"] | "",   sizeof(cfg()->mqtt_pass));
-    strlcpy(cfg()->mqtt_topic, topic,                   sizeof(cfg()->mqtt_topic));
+    strlcpy(cfg()->mqtt_host,  host,     sizeof(cfg()->mqtt_host));
+    strlcpy(cfg()->device_id,  deviceId, sizeof(cfg()->device_id));
+    strlcpy(cfg()->mqtt_user,  mqttUser, sizeof(cfg()->mqtt_user));
+    strlcpy(cfg()->mqtt_pass,  mqttPass, sizeof(cfg()->mqtt_pass));
+    cfg()->mqtt_port  = doc["mqtt_port"] | MQTT_PORT_TLS;
     cfg()->registered = true;
 
-    // Очищаем код привязки
     memset(cfg()->reg_code, 0, sizeof(cfg()->reg_code));
 
-    // Обновляем MQTT клиент с новым сервером
     _mqtt.setServer(cfg()->mqtt_host, cfg()->mqtt_port);
     _setupClient();
 
-    Serial.printf("[REG] OK — MQTT: %s@%s:%u topic=%s\n",
-      cfg()->mqtt_user, cfg()->mqtt_host, cfg()->mqtt_port, cfg()->mqtt_topic);
+    Serial.printf("[REG] OK — MQTT: %s@%s:%u device_id=%s\n",
+      cfg()->mqtt_user, cfg()->mqtt_host, cfg()->mqtt_port, cfg()->device_id);
+
+    // Печатаем реле для отладки
+    for (uint8_t i = 0; i < MAX_RELAYS; i++) {
+      if (!cfg()->relays[i].isValid()) continue;
+      Serial.printf("[REG] relay[%u] name=%s (group)\n", i, cfg()->relays[i].name);
+    }
     return true;
   }
 
@@ -122,13 +128,14 @@ public:
 
     Led.setMode(LedManager::CONNECTING);
 
-    String mac = WiFi.macAddress();
-    mac.replace(":", "");
-    String clientId = String(DEVICE_PREFIX) + "_" + mac;
+    String clientId = String(DEVICE_PREFIX) + "_" + cfg()->device_id;
 
-    // LWT — брокер опубликует при разрыве соединения
     char lwtTopic[64];
-    snprintf(lwtTopic, sizeof(lwtTopic), SYS_STATUS_TMPL, mac.c_str());
+    snprintf(lwtTopic, sizeof(lwtTopic), DEVICE_EVENTS_TMPL, cfg()->device_id);
+
+    char lwtPayload[64];
+    snprintf(lwtPayload, sizeof(lwtPayload),
+      "{\"online\":false,\"ts\":%lu}", (unsigned long)time(nullptr));
 
     Serial.printf("[MQTT] Connecting as %s to %s:%u...\n",
       clientId.c_str(), cfg()->mqtt_host, cfg()->mqtt_port);
@@ -138,7 +145,7 @@ public:
       cfg()->mqtt_user,
       cfg()->mqtt_pass,
       lwtTopic, 1, true,
-      "{\"online\":false}"
+      lwtPayload
     );
 
     if (!ok) {
@@ -150,15 +157,12 @@ public:
     Serial.println(F("[MQTT] Connected!"));
     Led.setMode(LedManager::RUNNING);
 
-    // Публикуем online
-    _publishOnline(mac);
-
-    // Подписываемся на команды — один топик для всего устройства
-    char cmdTopic[128];
-    snprintf(cmdTopic, sizeof(cmdTopic), RELAY_CMD_TMPL, cfg()->mqtt_topic);
+    char cmdTopic[64];
+    snprintf(cmdTopic, sizeof(cmdTopic), DEVICE_CMD_TMPL, cfg()->device_id);
     _mqtt.subscribe(cmdTopic, 1);
     Serial.printf("[MQTT] Subscribed: %s\n", cmdTopic);
 
+    publishOnline();
     return true;
   }
 
@@ -192,32 +196,57 @@ public:
     _mqtt.loop();
   }
 
-  bool isConnected()  { return _mqtt.connected(); }
+  bool isConnected() { return _mqtt.connected(); }
 
-  // ── Публикация статуса ВСЕХ реле ─────────────────────────
-  // Один retained payload в общий топик устройства.
-  // Формат: { "relays": [ {index, state} ... ], "ts": unix }
-  void publishAllStatuses() {
+  // ── Публикация online + статус всех реле ──────────────────
+  // {"online":true,"fw":"1.3.0","ts":...,"relays":[{"group":"test","state":"off"},...]}
+  void publishOnline() {
     if (!isConnected() || !cfg()->isRegistered()) return;
 
     JsonDocument doc;
+    doc["online"] = true;
+    doc["fw"]     = FW_VERSION;
+    doc["ts"]     = (uint32_t)time(nullptr);
     JsonArray arr = doc.createNestedArray("relays");
     for (uint8_t i = 0; i < Relays.getCount(); i++) {
+      uint8_t cfgIdx = Relays.getCfgIndex(i);
       JsonObject r = arr.createNestedObject();
-      r["index"] = Relays.getCfgIndex(i);
+      r["group"] = cfg()->relays[cfgIdx].name;  // имя реле = группа
       r["state"] = Relays.getState(i) ? "on" : "off";
     }
-    doc["ts"] = (uint32_t)time(nullptr);
 
-    char topic[128];
-    snprintf(topic, sizeof(topic), RELAY_STATUS_TMPL, cfg()->mqtt_topic);
+    char topic[64];
+    snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->device_id);
     String payload; serializeJson(doc, payload);
     _mqtt.publish(topic, payload.c_str(), true);
-    Serial.printf("[MQTT] → %s: %s\n", topic, payload.c_str());
+    Serial.printf("[MQTT] → online: %s\n", payload.c_str());
+  }
+
+  // ── Публикация изменений реле ─────────────────────────────
+  // [{"group":"test","state":"on","ts":...}]
+  void publishChanges(uint8_t changedMask) {
+    if (!isConnected() || !cfg()->isRegistered() || !changedMask) return;
+
+    JsonDocument doc;
+    JsonArray arr = doc.to<JsonArray>();
+    for (uint8_t i = 0; i < Relays.getCount(); i++) {
+      if (!(changedMask & (1 << i))) continue;
+      uint8_t cfgIdx = Relays.getCfgIndex(i);
+      JsonObject r = arr.createNestedObject();
+      r["group"] = cfg()->relays[cfgIdx].name;  // имя реле = группа
+      r["state"] = Relays.getState(i) ? "on" : "off";
+      r["ts"]    = (uint32_t)time(nullptr);
+    }
+
+    char topic[64];
+    snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->device_id);
+    String payload; serializeJson(doc, payload);
+    _mqtt.publish(topic, payload.c_str(), false);
+    Serial.printf("[MQTT] → changes: %s\n", payload.c_str());
   }
 
 private:
-  DeviceConfig*    _cfg      = nullptr;
+  DeviceConfig*    _cfg          = nullptr;
   WiFiClientSecure _secureClient;
   WiFiClientSecure _insecureClient;
   PubSubClient     _mqtt;
@@ -252,9 +281,9 @@ private:
     }
   }
 
-  // Входящее MQTT сообщение — команда реле
-  // Формат: { "action": "pulse"|"on"|"off", "relay": 0, "duration": 500 }
-  // relay — индекс реле (из cfg), если не указан — первое реле
+  // ── Входящая команда ──────────────────────────────────────
+  // {"group":"test","action":"pulse","duration":500}
+  // Реле ищется по имени (relay.name == group)
   void _onMessage(char* topic, byte* payload, unsigned int len) {
     String msg;
     msg.reserve(len);
@@ -267,47 +296,52 @@ private:
       return;
     }
 
+    const char* group    = doc["group"]    | "";
     const char* action   = doc["action"]   | "";
     uint32_t    duration = doc["duration"] | 0;
-    int8_t      cfgIdx   = doc["relay"]    | 0;   // индекс реле в cfg.relays[]
 
-    // Найти реле в RelayManager по cfg index
-    int8_t relayIdx = Relays.findByCfgIndex((uint8_t)cfgIdx);
+    // Найти реле по имени (имя реле = mqtt_topic группы)
+    int8_t relayIdx = _findRelayByName(group);
     if (relayIdx < 0) {
-      Serial.printf("[MQTT] Relay cfg[%d] not found\n", cfgIdx);
+      Serial.printf("[MQTT] Relay with name '%s' not found\n", group);
       return;
     }
 
+    uint8_t changedMask = 0;
     if (strcmp(action, "pulse") == 0 && duration > 0) {
-      Serial.printf("[CMD] pulse relay[%d] %ums\n", cfgIdx, duration);
+      Serial.printf("[CMD] pulse relay '%s' %ums\n", group, duration);
       Relays.pulse((uint8_t)relayIdx, duration);
+      changedMask = (1 << relayIdx);
     } else if (strcmp(action, "on") == 0) {
-      Serial.printf("[CMD] on relay[%d]\n", cfgIdx);
+      Serial.printf("[CMD] on relay '%s'\n", group);
       Relays.setState((uint8_t)relayIdx, true);
+      changedMask = (1 << relayIdx);
     } else if (strcmp(action, "off") == 0) {
-      Serial.printf("[CMD] off relay[%d]\n", cfgIdx);
+      Serial.printf("[CMD] off relay '%s'\n", group);
       Relays.setState((uint8_t)relayIdx, false);
+      changedMask = (1 << relayIdx);
+    } else if (strcmp(action, "toggle") == 0) {
+      bool cur = Relays.getState((uint8_t)relayIdx);
+      Serial.printf("[CMD] toggle relay '%s' -> %s\n", group, cur ? "off" : "on");
+      Relays.setState((uint8_t)relayIdx, !cur);
+      changedMask = (1 << relayIdx);
     } else {
       Serial.printf("[CMD] unknown action: %s\n", action);
       return;
     }
 
-    publishAllStatuses();
+    publishChanges(changedMask);
   }
 
-  void _publishOnline(const String& mac) {
-    char topic[64];
-    snprintf(topic, sizeof(topic), SYS_STATUS_TMPL, mac.c_str());
-    JsonDocument doc;
-    doc["online"]     = true;
-    doc["fw_version"] = FW_VERSION;
-    doc["mac"]        = WiFi.macAddress();
-    doc["ip"]         = WiFi.localIP().toString();
-    doc["relays"]     = (int)Relays.getCount();
-    doc["topic"]      = cfg()->mqtt_topic;
-    String payload; serializeJson(doc, payload);
-    _mqtt.publish(topic, payload.c_str(), true);
-    Serial.printf("[MQTT] Online → %s\n", topic);
+  // Найти индекс реле в RelayManager по имени реле
+  int8_t _findRelayByName(const char* name) {
+    if (!strlen(name)) return -1;
+    for (uint8_t i = 0; i < Relays.getCount(); i++) {
+      uint8_t cfgIdx = Relays.getCfgIndex(i);
+      if (strcmp(cfg()->relays[cfgIdx].name, name) == 0)
+        return (int8_t)i;
+    }
+    return -1;
   }
 };
 

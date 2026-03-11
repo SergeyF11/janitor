@@ -125,7 +125,7 @@ void setup() {
     Led.setMode(LedManager::ERROR);
   } else {
     Led.setMode(LedManager::RUNNING);
-    MqttMgr.publishAllStatuses();
+    // publishOnline() уже вызван внутри connect()
   }
 
   state = STATE_RUNNING;
@@ -136,9 +136,10 @@ void loop() {
   checkTimeSync();
   Led.update();
 
-  // Обновляем реле, при окончании импульса публикуем статус
-  if (Relays.update() && MqttMgr.isConnected()) {
-    MqttMgr.publishAllStatuses();
+  // Обновляем реле, при окончании импульса публикуем изменения
+  uint8_t changed = Relays.update();
+  if (changed && MqttMgr.isConnected()) {
+    MqttMgr.publishChanges(changed);
   }
 
   if (!WifiMgr.reconnectIfNeeded(cfg)) {

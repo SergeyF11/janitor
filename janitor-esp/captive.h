@@ -166,7 +166,7 @@ private:
         GP.ALERT("success",
           String(F("✅ Устройство привязано\n"))
           + "Сервер: " + _cfg->mqtt_host + "\n"
-          + "Топик: "  + _cfg->mqtt_topic);
+          + "Device ID: "  + _cfg->device_id);
       } else {
         GP.ALERT("warning", F("⚠️ Устройство не привязано"));
       }
@@ -244,7 +244,7 @@ private:
       GP.LABEL("Привязан: " + String(_cfg->isRegistered() ? "Да" : "Нет"));
       if (_cfg->isRegistered()) {
         GP.LABEL("Сервер: " + String(_cfg->mqtt_host));
-        GP.LABEL("Топик: "  + String(_cfg->mqtt_topic));
+        GP.LABEL("Device ID: "  + String(_cfg->device_id));
       }
       GP.LABEL("TZ: " + String(EspTime::getTz() ? EspTime::getTz() : "—"));
       GP.SEND(FPSTR(EspTime::SCRIPT));

@@ -6,28 +6,28 @@ async function deviceRoutes(app) {
 
   // POST /api/device/register
   //
-  // ESP регистрирует УСТРОЙСТВО одним кодом.
-  // Все реле устройства получают один общий MQTT топик группы.
+  // ESP регистрирует устройство одним кодом.
+  // Каждое реле привязывается к группе по имени: relay.name == group.mqtt_topic
   //
   // Запрос:
   // {
   //   mac:        "BC:FF:4D:4A:71:F2",
-  //   fw_version: "1.2.0",
-  //   code:       "141124",           // один код на устройство
+  //   fw_version: "1.3.0",
+  //   code:       "141124",
   //   relays: [
-  //     { index: 0, pin: 5,  name: "Ворота" },
-  //     { index: 1, pin: 12, name: "Шлагбаум" }
+  //     { index: 0, pin: 5,  name: "test" },    // имя реле = mqtt_topic группы
+  //     { index: 1, pin: 12, name: "gate" }
   //   ]
   // }
   //
   // Ответ:
   // {
-  //   ok:         true,
-  //   mqtt_host:  "smilart.ru",
-  //   mqtt_port:  8883,
-  //   mqtt_user:  "esp_BCFF4D4A71F2",
-  //   mqtt_pass:  "...",
-  //   mqtt_topic: "building_a"        // один топик для всех реле
+  //   ok:        true,
+  //   mqtt_host: "smilart.ru",
+  //   mqtt_port: 8883,
+  //   mqtt_user: "esp_BCFF4D4A71F2",
+  //   mqtt_pass: "...",
+  //   device_id: "BCFF4D4A71F2",
   // }
   app.post('/device/register', {
     schema: {
@@ -76,8 +76,6 @@ async function deviceRoutes(app) {
       return reply.code(400).send({ error: 'invalid_or_expired_code' })
     }
 
-    const { group_id, mqtt_topic } = token
-
     // MQTT credentials для устройства
     const mqttUser = `esp_${macClean}`
     const mqttPass = generatePassword()
@@ -93,14 +91,32 @@ async function deviceRoutes(app) {
             registered_at = NOW()
     `
 
-    // Привязать все реле устройства к одной группе
+    // Привязать каждое реле к группе по имени (relay.name == group.mqtt_topic)
+    // Реле без совпадения пропускаются (имя не совпадает ни с одной группой)
+    const registeredRelays = []
     for (const relay of relays) {
+      const relayName = (relay.name || '').trim()
+      if (!relayName) continue
+
+      const [group] = await db`
+        SELECT id, mqtt_topic FROM groups
+        WHERE name = ${relayName}
+          AND status = 'active'
+        LIMIT 1
+      `
+
+      if (!group) {
+        console.warn(`[register] relay[${relay.index}] name="${relayName}" — no matching group, skipping`)
+        continue
+      }
+
       await db`
         INSERT INTO device_groups (device_id, group_id, relay_index)
-        VALUES (${macClean}, ${group_id}, ${relay.index})
+        VALUES (${macClean}, ${group.id}, ${relay.index})
         ON CONFLICT (device_id, group_id, relay_index) DO UPDATE
           SET relay_index = ${relay.index}
       `
+      registeredRelays.push({ index: relay.index, group: group.mqtt_topic })
     }
 
     // Удалить использованный токен
@@ -115,36 +131,22 @@ async function deviceRoutes(app) {
 
     await db`
       INSERT INTO event_log (action, target_type, target_id, group_id, payload)
-      VALUES ('device_registered', 'device', ${macClean}, ${group_id},
+      VALUES ('device_registered', 'device', ${macClean}, ${token.group_id},
               ${JSON.stringify({
                 mac:        macClean,
                 fw_version,
-                mqtt_topic,
                 relay_count: relays.length,
-                relays:      relays.map(r => ({ index: r.index, pin: r.pin, name: r.name })),
+                relays:      registeredRelays,
               })})
     `
 
-    // Получить все группы устройства (могут быть уже ранее привязанные)
-    const deviceGroups = await db`
-      SELECT dg.relay_index, g.mqtt_topic
-      FROM device_groups dg
-      JOIN groups g ON g.id = dg.group_id
-      WHERE dg.device_id = ${macClean}
-      ORDER BY dg.relay_index
-    `
-
     return {
-      ok:           true,
-      mqtt_host:    process.env.MQTT_ESP_HOST || process.env.MQTT_HOST || 'smilart.ru',
-      mqtt_port:    parseInt(process.env.MQTT_ESP_PORT || process.env.MQTT_PORT || '8883'),
-      mqtt_user:    mqttUser,
-      mqtt_pass:    mqttPass,
-      device_id:    macClean,
-      topic_cmd:    `$devices/${macClean}/commands`,
-      topic_events: `$devices/${macClean}/events`,
-      // Список реле и их групп — ESP использует для маппинга команд
-      relays: deviceGroups.map(r => ({ relay_index: r.relay_index, group: r.mqtt_topic })),
+      ok:        true,
+      mqtt_host: process.env.MQTT_ESP_HOST || process.env.MQTT_HOST || 'smilart.ru',
+      mqtt_port: parseInt(process.env.MQTT_ESP_PORT || process.env.MQTT_PORT || '8883'),
+      mqtt_user: mqttUser,
+      mqtt_pass: mqttPass,
+      device_id: macClean,
     }
   })
 }

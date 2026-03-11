@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define FW_VERSION        "1.2.0"
+#define FW_VERSION        "1.3.0"
 #define DEVICE_PREFIX     "JANITOR"
 
 #define AP_SSID_PREFIX    "Janitor-"
@@ -14,19 +14,18 @@
 #define MQTT_PORT_TLS     8883
 #define MQTT_PORT_PLAIN   1883
 
-#define CONFIG_FILE       "/config.json"   // WiFi + MQTT + код привязки
-#define RELAY_FILE        "/relay.json"    // Настройки реле (пины, имена, топик)
+#define CONFIG_FILE       "/config.json"
+#define RELAY_FILE        "/relay.json"
 #define CERT_FILE         "/cert.der"
 
 #define CRYPTO_SALT       "JanitorSalt2024!"
-
 
 #ifdef ESP32
   #define RESET_PIN RX
   #define LED_PIN         2
   #define LED_ACTIVE_LOW  false
 #else
-  #define RESET_PIN 3 // RX
+  #define RESET_PIN 3
   #define LED_PIN         LED_BUILTIN
   #define LED_ACTIVE_LOW  true
 #endif
@@ -39,16 +38,18 @@
 
 #define MAX_RELAYS        4
 
-// MQTT топики
-#define RELAY_CMD_TMPL    "relay/%s/cmd"
-#define RELAY_STATUS_TMPL "relay/%s/status"
-#define SYS_STATUS_TMPL   "sys/devices/%s/status"
+// MQTT топики (протокол v2)
+// device_id = MAC без двоеточий в верхнем регистре: BCFF4D4A71F2
+#define DEVICE_CMD_TMPL    "$devices/%s/commands"   // ← команды на устройство
+#define DEVICE_EVENTS_TMPL "$devices/%s/events"     // → события от устройства
 
-// ── Реле — только пин и имя, топик общий для устройства ───────
+// ── Реле ──────────────────────────────────────────────────────
+// name = mqtt_topic группы (например "test", "gate", "door")
+// Имя реле — это и есть идентификатор группы в системе
 struct RelayConfig {
   uint8_t pin;
   bool    active_low;
-  char    name[32];     // отображаемое имя
+  char    name[64];     // имя реле = mqtt_topic группы
 
   bool isValid() const { return pin != (uint8_t)NOT_A_PIN; }
 };
@@ -66,10 +67,10 @@ struct DeviceConfig {
   uint16_t mqtt_port;
   char     mqtt_user[64];
   char     mqtt_pass[64];
-  char     mqtt_topic[64];  // общий топик для всех реле устройства
+  char     device_id[16];  // MAC без двоеточий: BCFF4D4A71F2
 
-  // Код привязки устройства (вводится один раз, очищается после регистрации)
-  char     reg_code[7];     // 6 цифр + \0
+  // Код привязки устройства
+  char     reg_code[7];
 
   bool     registered;
   bool     tls_secure;
@@ -78,7 +79,6 @@ struct DeviceConfig {
   // Реле
   RelayConfig relays[MAX_RELAYS];
 
-  // ── Вспомогательные методы ────────────────────────────────
   uint8_t relayCount() const {
     uint8_t n = 0;
     for (uint8_t i = 0; i < MAX_RELAYS; i++)
@@ -86,12 +86,10 @@ struct DeviceConfig {
     return n;
   }
 
-  bool hasPendingCode() const {
-    return strlen(reg_code) == 6;
-  }
+  bool hasPendingCode() const { return strlen(reg_code) == 6; }
 
   bool isRegistered() const {
-    return registered && strlen(mqtt_host) > 0 && strlen(mqtt_topic) > 0;
+    return registered && strlen(mqtt_host) > 0 && strlen(device_id) > 0;
   }
 
   void printTo(Stream& s) const {
@@ -99,8 +97,8 @@ struct DeviceConfig {
     if (strlen(wifi2_ssid)) s.printf("WiFi2: %s\n", wifi2_ssid);
     s.printf("TZ: %s\n", tz);
     if (isRegistered()) {
-      s.printf("MQTT: %s@%s:%u topic=%s\n",
-        mqtt_user, mqtt_host, mqtt_port, mqtt_topic);
+      s.printf("MQTT: %s@%s:%u device_id=%s\n",
+        mqtt_user, mqtt_host, mqtt_port, device_id);
     } else if (hasPendingCode()) {
       s.printf("Pending code: %s\n", reg_code);
     } else {
@@ -110,7 +108,7 @@ struct DeviceConfig {
       tls_secure ? "secure" : "insecure", relayCount());
     for (uint8_t i = 0; i < MAX_RELAYS; i++) {
       if (!relays[i].isValid()) continue;
-      s.printf("  [%u] pin=%u %s\n", i, relays[i].pin, relays[i].name);
+      s.printf("  [%u] pin=%u name=%s\n", i, relays[i].pin, relays[i].name);
     }
   }
 };

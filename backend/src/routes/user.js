@@ -105,7 +105,7 @@ async function userRoutes(app) {
 
     // Команда на устройство: {group, action, duration?}
     const cmd = {
-      group:  group.mqtt_topic,
+      group:  group.name,
       action,
       ...(action === 'pulse' ? { duration: group.relay_duration_ms } : {}),
     }
