@@ -4,14 +4,7 @@
 const BASE = '/janitor/api'
 let _accessToken = null
 let _refreshTimer = null
-let _onLogout     = null  // callback при выходе/инвалидации
-
-// ── MQTT состояние ────────────────────────────────────────────
-let _mqttClient   = null
-let _mqttCreds    = null   // {host, username, password, devices}
-let _onMqttStatus = null   // callback(connected: bool)
-
-const MQTT_CREDS_KEY = 'janitor_mqtt_creds'
+let _onLogout = null  // callback при выходе/инвалидации
 
 // ── Токен ─────────────────────────────────────────────────────
 export function setAccessToken(token) {
@@ -104,29 +97,21 @@ export function cancelRefresh() {
 
 // ── Auth ──────────────────────────────────────────────────────
 export async function login(loginStr, password) {
-  const fingerprint = await getDeviceFingerprint()
   const res = await fetch(`${BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ login: loginStr, password, fingerprint }),
+    body: JSON.stringify({ login: loginStr, password }),
   })
   if (!res.ok) throw await makeError(res)
   const data = await res.json()
   _accessToken = data.accessToken
   scheduleRefresh()
-  // Сохранить MQTT credentials если получены
-  if (data.mqtt) {
-    _mqttCreds = data.mqtt
-    localStorage.setItem(MQTT_CREDS_KEY, JSON.stringify(data.mqtt))
-    mqttConnect()
-  }
   return data
 }
 
 export async function logout() {
   cancelRefresh()
-  mqttDisconnect()
   try {
     await apiFetch('/auth/logout', { method: 'POST' })
   } catch {}
@@ -136,17 +121,7 @@ export async function logout() {
 export async function refreshOnStartup() {
   // Вызывается при загрузке приложения — восстановить сессию
   const ok = await tryRefresh()
-  if (ok) {
-    scheduleRefresh()
-    // Восстановить MQTT соединение из сохранённых credentials
-    const saved = localStorage.getItem(MQTT_CREDS_KEY)
-    if (saved) {
-      try {
-        _mqttCreds = JSON.parse(saved)
-        mqttConnect()
-      } catch {}
-    }
-  }
+  if (ok) scheduleRefresh()
   return ok
 }
 
@@ -166,20 +141,8 @@ export async function getMyGroups() {
   return apiFetch('/user/groups')
 }
 
-export async function triggerRelay(groupId, deviceId, mqttTopic, durationMs) {
-  // Попытка через MQTT напрямую
-  if (_mqttClient && _mqttClient.connected && deviceId) {
-    const action = durationMs === 0 ? 'toggle' : 'pulse'
-    const cmd = {
-      group:  mqttTopic,
-      action,
-      ...(action === 'pulse' ? { duration: durationMs } : {}),
-    }
-    _mqttClient.publish(`$devices/${deviceId}/commands`, JSON.stringify(cmd), { qos: 1 })
-    return { ok: true, via: 'mqtt' }
-  }
-  // Fallback — через бэкенд
-  return apiFetch(`/user/groups/${groupId}/trigger`, { method: 'POST' })
+export async function triggerRelay(relayId) {
+  return apiFetch(`/user/relays/${relayId}/trigger`, { method: 'POST' })
 }
 
 export async function getMyProfile() {
@@ -250,10 +213,14 @@ export async function updateSingleSession(userId, single_session) {
 }
 
 // ── Admin: устройства ─────────────────────────────────────────
-export async function adminTriggerRelay(groupId, relayIndex = 0) {
-  return apiFetch(`/admin/groups/${groupId}/trigger`, {
-    method: 'POST',
-    body: JSON.stringify({ relay: relayIndex }),
+export async function adminTriggerRelay(relayId) {
+  return apiFetch(`/admin/relays/${relayId}/trigger`, { method: 'POST' })
+}
+
+export async function patchAdminRelay(relayId, data) {
+  return apiFetch(`/admin/relays/${relayId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
   })
 }
 
@@ -360,7 +327,7 @@ export async function saQuery(sql) {
   return apiFetch('/sa/query', { method: 'POST', body: JSON.stringify({ sql }) })
 }
 
-// ── WebSocket (бэкенд → PWA) ─────────────────────────────────
+// ── WebSocket ─────────────────────────────────────────────────
 export function createWsConnection(onMessage) {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
   const url   = `${proto}://${window.location.host}/janitor/api/ws?token=${_accessToken}`
@@ -377,82 +344,9 @@ export function createWsConnection(onMessage) {
     } catch {}
   }
 
-  ws.onerror = (e) => console.warn('[ws] error (нет MQTT/WS — нормально для dev)', e)
+  ws.onerror = (e) => console.error('[ws] error', e)
 
   return ws
-}
-
-// ── MQTT (PWA → ESP напрямую) ─────────────────────────────────
-export function mqttConnect(onStatus) {
-  if (onStatus) _onMqttStatus = onStatus
-  if (!_mqttCreds) return
-
-  // Динамически импортируем mqtt.js (CDN или bundled)
-  import('mqtt').then((mqttModule) => {
-    const connect = mqttModule.connect || mqttModule.default?.connect || mqttModule.default
-    if (_mqttClient) {
-      try { _mqttClient.end(true) } catch {}
-    }
-
-    if (!connect) { console.warn('[mqtt] connect not found in module'); return }
-    _mqttClient = connect(_mqttCreds.host, {
-      username:        _mqttCreds.username,
-      password:        _mqttCreds.password,
-      clientId:        `pwa_${_mqttCreds.username}_${Date.now()}`,
-      clean:           true,
-      reconnectPeriod: 5000,
-    })
-
-    _mqttClient.on('connect', () => {
-      console.log('[mqtt] PWA connected')
-      _onMqttStatus?.(true)
-    })
-
-    _mqttClient.on('close', () => {
-      console.log('[mqtt] PWA disconnected')
-      _onMqttStatus?.(false)
-    })
-
-    _mqttClient.on('error', (e) => {
-      console.warn('[mqtt] PWA error:', e.message)
-      _onMqttStatus?.(false)
-    })
-  }).catch(e => {
-    console.warn('[mqtt] failed to load mqtt.js:', e.message)
-  })
-}
-
-export function mqttDisconnect() {
-  if (_mqttClient) {
-    try { _mqttClient.end(true) } catch {}
-    _mqttClient = null
-  }
-  _onMqttStatus?.(false)
-}
-
-export function isMqttConnected() {
-  return !!(_mqttClient && _mqttClient.connected)
-}
-
-// ── Device fingerprint ────────────────────────────────────────
-function getCanvasHash() {
-  try {
-    const c = document.createElement('canvas')
-    const ctx = c.getContext('2d')
-    ctx.textBaseline = 'top'
-    ctx.font = '14px Arial'
-    ctx.fillText('fingerprint🖋', 2, 2)
-    return c.toDataURL().slice(-32)
-  } catch { return 'nocanvas' }
-}
-
-export async function getDeviceFingerprint() {
-  const stored = localStorage.getItem('_did')
-  const uuid   = stored || crypto.randomUUID()
-  if (!stored) localStorage.setItem('_did', uuid)
-  const canvas = getCanvasHash()
-  const ua     = navigator.userAgent.slice(0, 40)
-  return `${uuid}|${canvas}|${ua}`
 }
 
 export async function importUsersFromGroup(groupId, sourceGroupId) {

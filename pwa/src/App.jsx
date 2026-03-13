@@ -10,9 +10,8 @@ import SuperAdmin from './pages/SuperAdmin'
 import './App.css'
 
 export default function App() {
-  const [state, setState]   = useState('loading')  // loading | login | change_password | main | superadmin
-  const [user, setUser]     = useState(null)
-  const [error, setError]   = useState(null)
+  const [state, setState] = useState('loading')
+  const [user, setUser]   = useState(null)
 
   const handleLogout = useCallback(() => {
     cancelRefresh()
@@ -23,23 +22,15 @@ export default function App() {
 
   useEffect(() => {
     setLogoutCallback(handleLogout)
-
-    // Попытаться восстановить сессию при загрузке
     refreshOnStartup().then(async (ok) => {
       if (ok) {
         try {
           const me = await getMe()
           setUser(me)
-          if (me.must_change_password) {
-            setState('change_password')
-          } else if (me.role === 'superadmin') {
-            setState('superadmin')
-          } else {
-            setState('main')
-          }
-        } catch {
-          setState('login')
-        }
+          if (me.must_change_password) setState('change_password')
+          else if (me.role === 'superadmin') setState('superadmin')
+          else setState('main')
+        } catch { setState('login') }
       } else {
         setState('login')
       }
@@ -48,44 +39,21 @@ export default function App() {
 
   const handleLoginSuccess = useCallback((data) => {
     setUser(data.user)
-    setError(null)
-    if (data.user.must_change_password) {
-      setState('change_password')
-    } else if (data.user.role === 'superadmin') {
-      setState('superadmin')
-    } else {
-      setState('main')
-    }
+    if (data.user.must_change_password) setState('change_password')
+    else if (data.user.role === 'superadmin') setState('superadmin')
+    else setState('main')
   }, [])
 
   const handlePasswordChanged = useCallback((data) => {
     setUser(data.user)
-    if (data.user.role === 'superadmin') {
-      setState('superadmin')
-    } else {
-      setState('main')
-    }
+    if (data.user.role === 'superadmin') setState('superadmin')
+    else setState('main')
   }, [])
 
-  if (state === 'loading') {
-    return (
-      <div className="app-loading">
-        <div className="spinner" />
-      </div>
-    )
-  }
-
-  if (state === 'login') {
-    return <Login onSuccess={handleLoginSuccess} />
-  }
-
-  if (state === 'change_password') {
-    return <ChangePassword user={user} onSuccess={handlePasswordChanged} />
-  }
-
-  if (state === 'superadmin') {
-    return <SuperAdmin user={user} onLogout={handleLogout} />
-  }
+  if (state === 'loading')         return <div className="app-loading"><div className="spinner" /></div>
+  if (state === 'login')           return <Login onSuccess={handleLoginSuccess} />
+  if (state === 'change_password') return <ChangePassword user={user} onSuccess={handlePasswordChanged} />
+  if (state === 'superadmin')      return <SuperAdmin user={user} onLogout={handleLogout} />
 
   return <Main user={user} onLogout={handleLogout} />
 }

@@ -1,47 +1,35 @@
 'use strict'
+const fs   = require('fs')
 const mqtt = require('mqtt')
 const { getDb } = require('../db/connection')
-const dynsec = require('./dynsec')
 
 let client = null
 
 async function connect() {
-  const host     = process.env.MQTT_HOST     || 'localhost'
-  const port     = process.env.MQTT_PORT     || '1883'
-  const user     = process.env.MQTT_USER     || 'mqttadmin'
-  const password = process.env.MQTT_PASSWORD || ''
-  const protocol = process.env.MQTT_PROTOCOL || 'mqtt'  // mqtt | mqtts | ws | wss
+  const host     = process.env.MQTT_HOST     || 'mqtt.cloud.yandex.net'
+  const port     = parseInt(process.env.MQTT_PORT || '8883')
+  const certFile = process.env.MQTT_CERT_FILE
+  const keyFile  = process.env.MQTT_KEY_FILE
+  const caFile   = process.env.MQTT_CA_FILE
 
-  const url = `${protocol}://${host}:${port}`
-
-  client = mqtt.connect(url, {
-    username:           user,
-    password,
+  const options = {
     clientId:           `janitor-backend-${Date.now()}`,
     clean:              true,
     reconnectPeriod:    5000,
     connectTimeout:     10000,
-    rejectUnauthorized: process.env.MQTT_REJECT_UNAUTHORIZED !== 'false',
-  })
+    cert:               fs.readFileSync(certFile),
+    key:                fs.readFileSync(keyFile),
+    ca:                 fs.readFileSync(caFile),
+    rejectUnauthorized: true,
+  }
 
-  dynsec.setClient(client)
+  const url = `mqtts://${host}:${port}`
+  client = mqtt.connect(url, options)
 
-  let backendRoleReady = false
-
-  client.on('connect', async () => {
+  client.on('connect', () => {
     console.log(`[mqtt] Connected to ${url}`)
-
-    // Подписаться на события всех устройств
-    client.subscribe('$devices/+/events', { qos: 1 })
-
-    // Убедиться что у бэкенда есть права — только один раз, в фоне
-    if (!backendRoleReady) {
-      backendRoleReady = true  // сразу ставим флаг чтобы не запускать повторно
-      dynsec.ensureBackendRole(user).catch(e => {
-        backendRoleReady = false  // сбросить если не удалось
-        console.error('[dynsec] ensureBackendRole:', e.message)
-      })
-    }
+    const registryId = process.env.YC_REGISTRY_ID
+    client.subscribe(`$registries/${registryId}/events`, { qos: 1 })
   })
 
   client.on('message', async (topic, payload) => {
@@ -52,13 +40,8 @@ async function connect() {
     }
   })
 
-  client.on('error', (err) => {
-    console.error('[mqtt] error:', err.message)
-  })
-
-  client.on('disconnect', () => {
-    console.log('[mqtt] Disconnected')
-  })
+  client.on('error',      (err) => console.error('[mqtt] error:', err.message))
+  client.on('disconnect', ()    => console.log('[mqtt] Disconnected'))
 
   return client
 }
@@ -66,72 +49,68 @@ async function connect() {
 async function handleMessage(topic, payload) {
   const db = getDb()
 
-  // $devices/<MAC>/events — все события от ESP
   const eventsMatch = topic.match(/^\$devices\/([^/]+)\/events$/)
   if (!eventsMatch) return
 
-  const macClean = eventsMatch[1]
+  const deviceId = eventsMatch[1]
   let data
   try { data = JSON.parse(payload) } catch { return }
 
-  // LWT или явный offline: {online: false}
+  // ── offline: {online: false} или LWT ──
   if (data.online === false) {
-    await db`
-      UPDATE devices SET is_online = false WHERE device_id = ${macClean}
-    `
-    broadcastDeviceStatus(macClean, false)
+    await db`UPDATE devices SET is_online = false WHERE device_id = ${deviceId}`
+    broadcastDeviceStatus(deviceId, false)
     return
   }
 
-  // Online + полный статус при подключении: {online: true, relays: [{group, state}, ...]}
+  // ── online: {online: true, fw, relays: [{name, state}]} ──
   if (data.online === true) {
     await db`
       UPDATE devices
       SET is_online  = true,
           last_seen  = NOW(),
           fw_version = COALESCE(${data.fw || null}, fw_version)
-      WHERE device_id = ${macClean}
+      WHERE device_id = ${deviceId}
     `
-    broadcastDeviceStatus(macClean, true)
+    broadcastDeviceStatus(deviceId, true)
 
-    // Разослать статус каждой группы
     if (Array.isArray(data.relays)) {
       for (const r of data.relays) {
-        broadcastRelayStatus(r.group, r.state)
+        // Обновить last_state в relays по имени
+        const [relay] = await db`
+          UPDATE relays SET last_state = ${r.state}, last_state_at = NOW()
+          WHERE device_id = ${deviceId} AND name = ${r.name}
+          RETURNING id
+        `
+        if (relay) broadcastRelayStatus(relay.id, r.state)
       }
     }
     return
   }
 
-  // Изменение состояния реле: [{group, state, ts}, ...]
+  // ── изменение реле: [{name, state, ts}, ...] ──
   if (Array.isArray(data)) {
-    await db`UPDATE devices SET last_seen = NOW() WHERE device_id = ${macClean}`
+    await db`UPDATE devices SET last_seen = NOW() WHERE device_id = ${deviceId}`
     for (const r of data) {
-      broadcastRelayStatus(r.group, r.state)
+      const [relay] = await db`
+        UPDATE relays SET last_state = ${r.state}, last_state_at = NOW()
+        WHERE device_id = ${deviceId} AND name = ${r.name}
+        RETURNING id
+      `
+      if (relay) broadcastRelayStatus(relay.id, r.state)
     }
-    return
   }
 }
 
-// ── WebSocket broadcast (заполняется из ws.js) ────────────────
 let _broadcastRelayStatus  = () => {}
 let _broadcastDeviceStatus = () => {}
 
-function broadcastRelayStatus(mqttTopic, data) {
-  _broadcastRelayStatus(mqttTopic, data)
-}
-
-function broadcastDeviceStatus(deviceId, online) {
-  _broadcastDeviceStatus(deviceId, online)
-}
-
+function broadcastRelayStatus(relayId, state)   { _broadcastRelayStatus(relayId, state) }
+function broadcastDeviceStatus(deviceId, online) { _broadcastDeviceStatus(deviceId, online) }
 function setBroadcasters(relayFn, deviceFn) {
   _broadcastRelayStatus  = relayFn
   _broadcastDeviceStatus = deviceFn
 }
-
-function getClient() {
-  return client
-}
+function getClient() { return client }
 
 module.exports = { connect, getClient, setBroadcasters }

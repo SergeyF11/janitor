@@ -111,8 +111,6 @@ public:
     return true;
   }
 
-  // ── Конфиг реле: пины, active_low, имена ──────────────────
-  // Имя реле = mqtt_topic группы (задаётся пользователем в портале)
   bool loadRelayConfig(DeviceConfig& cfg) {
     if (!LittleFS.exists(RELAY_FILE)) return false;
     File f = LittleFS.open(RELAY_FILE, "r");
@@ -139,11 +137,11 @@ public:
 
   void resetRegistration(DeviceConfig& cfg) {
     cfg.registered = false;
-    memset(cfg.mqtt_host,  0, sizeof(cfg.mqtt_host));
-    memset(cfg.mqtt_user,  0, sizeof(cfg.mqtt_user));
-    memset(cfg.mqtt_pass,  0, sizeof(cfg.mqtt_pass));
-    memset(cfg.device_id,  0, sizeof(cfg.device_id));
-    memset(cfg.reg_code,   0, sizeof(cfg.reg_code));
+    memset(cfg.mqtt_host,    0, sizeof(cfg.mqtt_host));
+    memset(cfg.mqtt_user,    0, sizeof(cfg.mqtt_user));
+    memset(cfg.mqtt_pass,    0, sizeof(cfg.mqtt_pass));
+    memset(cfg.registry_id,  0, sizeof(cfg.registry_id));
+    memset(cfg.reg_code,     0, sizeof(cfg.reg_code));
     saveMainConfig(cfg);
     Serial.println(F("[FS] Registration reset"));
   }
@@ -177,16 +175,16 @@ private:
   bool _parseMain(const String& json, DeviceConfig& cfg) {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return false;
-    strlcpy(cfg.wifi1_ssid, doc["w1s"] | "", sizeof(cfg.wifi1_ssid));
-    strlcpy(cfg.wifi1_psk,  doc["w1p"] | "", sizeof(cfg.wifi1_psk));
-    strlcpy(cfg.wifi2_ssid, doc["w2s"] | "", sizeof(cfg.wifi2_ssid));
-    strlcpy(cfg.wifi2_psk,  doc["w2p"] | "", sizeof(cfg.wifi2_psk));
-    strlcpy(cfg.mqtt_host,  doc["mh"]  | "", sizeof(cfg.mqtt_host));
+    strlcpy(cfg.wifi1_ssid,   doc["w1s"] | "", sizeof(cfg.wifi1_ssid));
+    strlcpy(cfg.wifi1_psk,    doc["w1p"] | "", sizeof(cfg.wifi1_psk));
+    strlcpy(cfg.wifi2_ssid,   doc["w2s"] | "", sizeof(cfg.wifi2_ssid));
+    strlcpy(cfg.wifi2_psk,    doc["w2p"] | "", sizeof(cfg.wifi2_psk));
+    strlcpy(cfg.mqtt_host,    doc["mh"]  | "", sizeof(cfg.mqtt_host));
     cfg.mqtt_port = doc["mp"] | MQTT_PORT_TLS;
-    strlcpy(cfg.mqtt_user,  doc["mu"]  | "", sizeof(cfg.mqtt_user));
-    strlcpy(cfg.mqtt_pass,  doc["mps"] | "", sizeof(cfg.mqtt_pass));
-    strlcpy(cfg.device_id,  doc["did"] | "", sizeof(cfg.device_id));
-    strlcpy(cfg.reg_code,   doc["rc"]  | "", sizeof(cfg.reg_code));
+    strlcpy(cfg.mqtt_user,    doc["mu"]  | "", sizeof(cfg.mqtt_user));
+    strlcpy(cfg.mqtt_pass,    doc["mps"] | "", sizeof(cfg.mqtt_pass));
+    strlcpy(cfg.registry_id,  doc["rid"] | "", sizeof(cfg.registry_id));
+    strlcpy(cfg.reg_code,     doc["rc"]  | "", sizeof(cfg.reg_code));
     cfg.registered = doc["reg"] | false;
     cfg.tls_secure = doc["tls"] | false;
     strlcpy(cfg.tz, doc["tz"] | "", sizeof(cfg.tz));
@@ -203,7 +201,7 @@ private:
     doc["mp"]  = cfg.mqtt_port;
     doc["mu"]  = cfg.mqtt_user;
     doc["mps"] = cfg.mqtt_pass;
-    doc["did"] = cfg.device_id;
+    doc["rid"] = cfg.registry_id;
     doc["rc"]  = cfg.reg_code;
     doc["reg"] = cfg.registered;
     doc["tls"] = cfg.tls_secure;
@@ -236,7 +234,7 @@ private:
       r["i"]  = i;
       r["p"]  = cfg.relays[i].pin;
       r["al"] = cfg.relays[i].active_low;
-      r["n"]  = cfg.relays[i].name;  // имя = mqtt_topic группы
+      r["n"]  = cfg.relays[i].name;
     }
     String out; serializeJson(doc, out);
     return out;

@@ -411,9 +411,8 @@ input[type="checkbox"] { width: auto; accent-color: var(--primary); }
 .log-ts     { color: var(--text2); white-space: nowrap; flex-shrink: 0; }
 .log-actor  { color: var(--text); font-weight: 600; }
 .log-action { font-family: monospace; padding: 1px 6px; border-radius: 4px; background: var(--bg3); }
-.log-description { color: var(--text); }
 .log-group  { color: var(--text2); font-size: 11px; }
-.log-payload { color: var(--text2); font-size: 12px; }
+.log-payload { color: var(--text2); font-family: monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
 .log-ip     { color: var(--text2); font-size: 11px; margin-left: auto; }
 
 .action-login          { color: var(--success); }
@@ -591,100 +590,18 @@ input[type="checkbox"] { width: auto; accent-color: var(--primary); }
 .user-picker-item.selected { background: rgba(92,110,248,0.12); }
 .user-picker-login { font-weight: 600; font-size: 14px; }
 .user-picker-name  { font-size: 12px; color: var(--text2); }
-/* ── Relay grid ─────────────────────────────────────────────── */
-.relay-grid {
+/* ── Сетка кнопок реле ───────────────────────────────────────── */
+.buttons-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  grid-auto-rows: 1fr;
 }
 
-.relay-grid-item {
-  position: relative;
-}
-
-.relay-grid-item-full {
+.buttons-grid .relay-btn:only-child {
   grid-column: 1 / -1;
 }
 
-.relay-btn-large {
-  position: relative;
-  width: 100%;
-  min-height: 80px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 12px;
-  font-size: 15px;
-  font-weight: 600;
-  padding: 16px 12px;
-}
-
-.relay-btn-name {
-  font-size: 14px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.relay-btn-status {
-  position: absolute;
-  bottom: 6px;
-  right: 8px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  font-weight: 400;
-  opacity: 0.65;
-}
-
-.relay-settings-btn {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 14px;
-  z-index: 1;
-  opacity: 0.6;
-  line-height: 1;
-  padding: 2px;
-}
-.relay-settings-btn:hover { opacity: 1; }
-
-/* ── Admin credentials modal ────────────────────────────────── */
-.sa-creds-modal {
-  position: fixed; inset: 0; background: rgba(0,0,0,.6);
-  display: flex; align-items: center; justify-content: center; z-index: 100;
-}
-.sa-creds-box {
-  background: var(--bg1); border: 1px solid var(--border);
-  border-radius: 12px; padding: 24px; max-width: 400px; width: 90%;
-  display: flex; flex-direction: column; gap: 12px;
-}
-.sa-creds-title { font-weight: 600; font-size: 15px; }
-.sa-creds-row { font-size: 14px; }
-.sa-creds-row code {
-  background: var(--bg2); padding: 2px 8px; border-radius: 4px;
-  font-family: monospace; user-select: all;
-}
-.sa-creds-hint { font-size: 12px; color: var(--accent-warn, #f90); }
-
-/* ── MQTT индикатор ──────────────────────────────────────────── */
-.mqtt-dot {
-  display: inline-block;
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  margin-left: 6px;
-  vertical-align: middle;
-}
-.mqtt-dot.online  { background: var(--accent-ok, #4caf50); }
-.mqtt-dot.offline { background: var(--text2); opacity: .5; }
-
-/* Кнопка недоступна (нет MQTT и нет бэка) */
-.relay-unavailable {
-  opacity: .4 !important;
-  cursor: not-allowed !important;
+.buttons-grid .relay-btn:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }

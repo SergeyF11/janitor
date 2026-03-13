@@ -1,0 +1,9 @@
+node_modules/
+backend/node_modules/
+pwa/node_modules/
+pwa/dist/
+postgres/data/
+redis/data/
+*.rdb
+*.log
+.env

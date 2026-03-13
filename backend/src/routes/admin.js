@@ -2,186 +2,209 @@
 const { getDb } = require('../db/connection')
 const { createUser, resetUserSessions, authenticate, requireRole } = require('../services/auth.service')
 
-// ── Проверка: текущий пользователь является админом группы ────
 async function requireGroupAdmin(req, reply) {
-  const db = getDb()
+  const db      = getDb()
   const groupId = req.params.groupId || req.params.id
   if (!groupId) return reply.code(400).send({ error: 'groupId required' })
-
-  // superadmin имеет доступ ко всем группам
   if (req.user.role === 'superadmin') return
-
   const [m] = await db`
     SELECT role FROM user_groups
     WHERE user_id = ${req.user.id} AND group_id = ${groupId}
   `
-  if (!m || m.role !== 'admin') {
-    return reply.code(403).send({ error: 'forbidden' })
-  }
+  if (!m || m.role !== 'admin') return reply.code(403).send({ error: 'forbidden' })
 }
 
 async function adminRoutes(app) {
 
   // ── ГРУППЫ ───────────────────────────────────────────────────
 
-  // GET /api/admin/groups — группы где текущий пользователь является админом
   app.get('/admin/groups', {
     onRequest: [authenticate, requireRole('admin', 'superadmin')]
   }, async (req) => {
     const db = getDb()
     return db`
-      SELECT g.id, g.name, g.mqtt_topic, g.relay_duration_ms,
-             g.status, g.expires_at, g.grace_until, g.user_quota,
-             COUNT(ug.user_id) FILTER (WHERE ug.role = 'user') as user_count
+      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.user_quota,
+             COUNT(ug2.user_id) FILTER (WHERE ug2.role = 'user') AS user_count,
+             d.device_id, d.is_online, d.fw_version, d.last_seen
       FROM groups g
-      JOIN user_groups ug ON ug.group_id = g.id
-      WHERE ug.user_id = ${req.user.id} AND ug.role = 'admin'
-      GROUP BY g.id
+      JOIN user_groups ug ON ug.group_id = g.id AND ug.user_id = ${req.user.id} AND ug.role = 'admin'
+      LEFT JOIN user_groups ug2 ON ug2.group_id = g.id
+      LEFT JOIN devices d ON d.group_id = g.id
+      GROUP BY g.id, d.device_id, d.is_online, d.fw_version, d.last_seen
       ORDER BY g.name
     `
   })
 
-  // PATCH /api/admin/groups/:id — изменить название и режим реле
   app.patch('/admin/groups/:id', {
     onRequest: [authenticate, requireGroupAdmin],
+    schema: {
+      body: { type: 'object', properties: { name: { type: 'string', minLength: 1, maxLength: 100 } } }
+    }
+  }, async (req) => {
+    const db = getDb()
+    if (req.body.name !== undefined) {
+      await db`UPDATE groups SET name = ${req.body.name}, updated_at = NOW() WHERE id = ${req.params.id}`
+    }
+    return { ok: true }
+  })
+
+  // ── РЕЛЕ ─────────────────────────────────────────────────────
+
+  app.get('/admin/groups/:id/relays', {
+    onRequest: [authenticate, requireGroupAdmin]
+  }, async (req) => {
+    const db = getDb()
+    return db`
+      SELECT r.id, r.relay_index, r.name, r.duration_ms, r.last_state, r.last_state_at
+      FROM relays r
+      JOIN devices d ON d.device_id = r.device_id
+      WHERE d.group_id = ${req.params.id}
+      ORDER BY r.relay_index
+    `
+  })
+
+  app.patch('/admin/relays/:relayId', {
+    onRequest: [authenticate],
     schema: {
       body: {
         type: 'object',
         properties: {
-          name:              { type: 'string', minLength: 1, maxLength: 100 },
-          relay_duration_ms: { type: 'integer', minimum: 0 }
+          name:        { type: 'string', minLength: 1, maxLength: 100 },
+          duration_ms: { type: 'integer', minimum: 0 },
         }
       }
     }
   }, async (req, reply) => {
     const db = getDb()
-    const { name, relay_duration_ms } = req.body
-    if (name !== undefined) {
-      await db`UPDATE groups SET name = ${name}, updated_at = NOW() WHERE id = ${req.params.id}`
-    }
-    if (relay_duration_ms !== undefined) {
-      await db`UPDATE groups SET relay_duration_ms = ${relay_duration_ms}, updated_at = NOW() WHERE id = ${req.params.id}`
-    }
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
-      VALUES (${req.user.id}, ${req.user.login}, 'update_group', 'group', ${req.params.id},
-              ${JSON.stringify(req.body)})
+    const [relay] = await db`
+      SELECT r.id, d.group_id FROM relays r
+      JOIN devices d ON d.device_id = r.device_id
+      WHERE r.id = ${req.params.relayId}
     `
+    if (!relay) return reply.code(404).send({ error: 'not_found' })
+
+    if (req.user.role !== 'superadmin') {
+      const [m] = await db`SELECT role FROM user_groups WHERE user_id = ${req.user.id} AND group_id = ${relay.group_id}`
+      if (!m || m.role !== 'admin') return reply.code(403).send({ error: 'forbidden' })
+    }
+
+    const { name, duration_ms } = req.body
+    if (name        !== undefined) await db`UPDATE relays SET name = ${name} WHERE id = ${req.params.relayId}`
+    if (duration_ms !== undefined) await db`UPDATE relays SET duration_ms = ${duration_ms} WHERE id = ${req.params.relayId}`
     return { ok: true }
+  })
+
+  app.post('/admin/relays/:relayId/trigger', {
+    onRequest: [authenticate]
+  }, async (req, reply) => {
+    const db = getDb()
+    const [relay] = await db`
+      SELECT r.id, r.name, r.duration_ms, r.device_id, r.last_state,
+             d.mqtt_user, d.group_id, d.is_online
+      FROM relays r
+      JOIN devices d ON d.device_id = r.device_id
+      WHERE r.id = ${req.params.relayId}
+    `
+    if (!relay) return reply.code(404).send({ error: 'not_found' })
+
+    if (req.user.role !== 'superadmin') {
+      const [m] = await db`SELECT role FROM user_groups WHERE user_id = ${req.user.id} AND group_id = ${relay.group_id}`
+      if (!m || m.role !== 'admin') return reply.code(403).send({ error: 'forbidden' })
+    }
+
+    if (!relay.is_online) return reply.code(503).send({ error: 'device_offline' })
+
+    let action, newState
+    if (relay.duration_ms === 0) {
+      newState = relay.last_state === 'on' ? 'off' : 'on'
+      action   = newState
+    } else {
+      newState = 'pulse'
+      action   = 'pulse'
+    }
+
+    const cmd   = { relay: relay.name, action, ...(action === 'pulse' ? { duration: relay.duration_ms } : {}) }
+    const topic = `$devices/${relay.mqtt_user}/commands`
+
+    const mqttClient = app.mqtt
+    if (!mqttClient?.connected) return reply.code(503).send({ error: 'mqtt_unavailable' })
+    mqttClient.publish(topic, JSON.stringify(cmd), { qos: 1 })
+
+    await db`
+      INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload)
+      VALUES ('relay_trigger', ${req.user.id}, ${req.user.login},
+              ${relay.group_id}, ${relay.id},
+              ${JSON.stringify({ relay: relay.name, action, state: newState, by: 'admin' })})
+    `
+    return { ok: true, state: newState }
   })
 
   // ── ПОЛЬЗОВАТЕЛИ ГРУППЫ ───────────────────────────────────────
 
-  // GET /api/admin/groups/:groupId/users
   app.get('/admin/groups/:groupId/users', {
     onRequest: [authenticate, requireGroupAdmin]
   }, async (req) => {
     const db = getDb()
     return db`
-      SELECT u.id, u.login, u.display_name, u.phone, u.email,
+      SELECT u.id, u.login, u.display_name, u.phone,
              ug.role, ug.description, ug.created_at,
              u.single_session, u.must_change_password, u.is_active,
-             u.created_by,
-             g.mqtt_topic,
-             EXISTS(
-               SELECT 1 FROM refresh_tokens rt
-               WHERE rt.user_id = u.id AND rt.expires_at > NOW()
-             ) as has_session
+             EXISTS(SELECT 1 FROM refresh_tokens rt
+                    WHERE rt.user_id = u.id AND rt.expires_at > NOW()) AS has_session
       FROM users u
       JOIN user_groups ug ON ug.user_id = u.id
-      JOIN groups g ON g.id = ug.group_id
       WHERE ug.group_id = ${req.params.groupId}
       ORDER BY ug.role DESC, u.login
     `
   })
 
-  // POST /api/admin/groups/:groupId/users — добавить пользователя
-  // Два режима:
-  //   1. Новый: { login, password, role, description, single_session }
-  //   2. Существующий по ID: { user_id, description }
   app.post('/admin/groups/:groupId/users', {
     onRequest: [authenticate, requireGroupAdmin],
     schema: {
       body: {
         type: 'object',
         properties: {
-          // Режим 1: новый пользователь
           login:          { type: 'string', minLength: 3, maxLength: 100 },
           password:       { type: 'string', minLength: 6 },
           role:           { type: 'string', enum: ['user', 'admin'], default: 'user' },
           single_session: { type: 'boolean' },
           display_name:   { type: 'string', maxLength: 200 },
           phone:          { type: 'string', maxLength: 50 },
-          email:          { type: 'string', maxLength: 200 },
-          // Режим 2: существующий пользователь
-          user_id:        { type: 'string', format: 'uuid' },
-          // Общее
           description:    { type: 'string', maxLength: 500 },
+          user_id:        { type: 'string', format: 'uuid' },
         }
       }
     }
   }, async (req, reply) => {
-    const db = getDb()
+    const db      = getDb()
     const groupId = req.params.groupId
     const { login, password, role = 'user', description = null,
-            user_id, display_name, phone, email } = req.body
+            user_id, display_name, phone } = req.body
     let { single_session } = req.body
 
-    // Проверить квоту (только для пользователей)
     if (role === 'user') {
       const [group] = await db`SELECT user_quota FROM groups WHERE id = ${groupId}`
-      if (group.user_quota > 0) {
-        const [{ count }] = await db`
-          SELECT COUNT(*) as count FROM user_groups ug
-          WHERE ug.group_id = ${groupId} AND ug.role = 'user'
-        `
-        if (parseInt(count) >= group.user_quota) {
-          return reply.code(403).send({
-            error:   'quota_exceeded',
-            message: `Достигнут лимит пользователей (${group.user_quota})`
-          })
-        }
+      if (group?.user_quota > 0) {
+        const [{ count }] = await db`SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${groupId} AND role = 'user'`
+        if (parseInt(count) >= group.user_quota) return reply.code(403).send({ error: 'quota_exceeded' })
       }
     }
 
     let targetUserId
-
     if (user_id) {
-      // ── Режим 2: добавить существующего пользователя по ID ──
       const [existing] = await db`SELECT id, role FROM users WHERE id = ${user_id}`
       if (!existing) return reply.code(404).send({ error: 'user_not_found' })
       if (existing.role === 'superadmin') return reply.code(403).send({ error: 'forbidden' })
       targetUserId = user_id
     } else {
-      // ── Режим 1: создать нового пользователя ────────────────
-      if (!login || !password) {
-        return reply.code(400).send({ error: 'login and password required' })
-      }
-
-      // Получить флаг создателя для определения single_session
+      if (!login || !password) return reply.code(400).send({ error: 'login_and_password_required' })
       const [creator] = await db`SELECT single_session FROM users WHERE id = ${req.user.id}`
+      single_session = role === 'user' ? true : (creator?.single_session ? true : (single_session ?? true))
 
-      if (role === 'user') {
-        single_session = true  // пользователи всегда ограничены
-      } else {
-        // admin: если создатель ограничен — нельзя создать без ограничения
-        if (creator.single_session) {
-          single_session = true
-        } else {
-          single_session = single_session !== undefined ? single_session : true
-        }
-      }
-
-      // Проверить уникальность логина:
-      // - для admin: глобально (по уникальному индексу)
-      // - для user:  в пределах группы
       if (role === 'user') {
         const [taken] = await db`
-          SELECT u.id FROM users u
-          JOIN user_groups ug ON ug.user_id = u.id
-          WHERE u.login    = ${login}
-            AND ug.group_id = ${groupId}
-            AND u.role      = 'user'
+          SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id
+          WHERE u.login = ${login} AND ug.group_id = ${groupId} AND u.role = 'user'
         `
         if (taken) return reply.code(409).send({ error: 'login_taken' })
       } else {
@@ -190,457 +213,173 @@ async function adminRoutes(app) {
       }
 
       const newUser = await createUser(login, password, role, req.user.id, {
-        must_change_password: true,
-        single_session,
-        display_name: display_name || null,
-        phone:        phone || null,
-        email:        email || null,
+        must_change_password: true, single_session,
+        display_name: display_name || null, phone: phone || null,
       })
       targetUserId = newUser.id
     }
 
-    // Добавить в группу
-    const [existing_membership] = await db`
-      SELECT user_id FROM user_groups
-      WHERE user_id = ${targetUserId} AND group_id = ${groupId}
-    `
-    if (existing_membership) {
-      return reply.code(409).send({ error: 'already_in_group' })
-    }
+    const [exists] = await db`SELECT 1 FROM user_groups WHERE user_id = ${targetUserId} AND group_id = ${groupId}`
+    if (exists) return reply.code(409).send({ error: 'already_in_group' })
 
-    await db`
-      INSERT INTO user_groups (user_id, group_id, role, description, created_by)
-      VALUES (${targetUserId}, ${groupId}, ${role}, ${description}, ${req.user.id})
-    `
-
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
-      VALUES (${req.user.id}, ${req.user.login}, 'add_user_to_group', 'user', ${targetUserId},
-              ${groupId}, ${JSON.stringify({ login: login || null, role, description, mode: user_id ? 'existing' : 'new' })})
-    `
-
+    await db`INSERT INTO user_groups (user_id, group_id, role, description, created_by)
+             VALUES (${targetUserId}, ${groupId}, ${role}, ${description}, ${req.user.id})`
     return reply.code(201).send({ ok: true, userId: targetUserId })
   })
 
-  // PATCH /api/admin/groups/:groupId/users/:userId — изменить описание
-  app.patch('/admin/groups/:groupId/users/:userId', {
-    onRequest: [authenticate, requireGroupAdmin],
-    schema: {
-      body: {
-        type: 'object',
-        properties: {
-          description: { type: 'string', maxLength: 500 }
-        }
-      }
-    }
-  }, async (req, reply) => {
-    const db = getDb()
-    const { groupId, userId } = req.params
-
-    await db`
-      UPDATE user_groups SET description = ${req.body.description ?? null}
-      WHERE group_id = ${groupId} AND user_id = ${userId}
-    `
-    return { ok: true }
-  })
-
-  // DELETE /api/admin/groups/:groupId/users/:userId
-  // Удаляет из группы; триггер автоматически удаляет пользователя если нет других групп
   app.delete('/admin/groups/:groupId/users/:userId', {
     onRequest: [authenticate, requireGroupAdmin]
   }, async (req, reply) => {
+    if (req.params.userId === req.user.id) return reply.code(403).send({ error: 'cannot_remove_yourself' })
     const db = getDb()
-    const { groupId, userId } = req.params
-
-    // Нельзя удалить самого себя
-    if (userId === req.user.id) {
-      return reply.code(403).send({ error: 'cannot_remove_yourself' })
-    }
-
-    const [member] = await db`
-      SELECT ug.role, u.login FROM user_groups ug
-      JOIN users u ON u.id = ug.user_id
-      WHERE ug.group_id = ${groupId} AND ug.user_id = ${userId}
-    `
-    if (!member) return reply.code(404).send({ error: 'not_found' })
-
-    await db`
-      DELETE FROM user_groups WHERE group_id = ${groupId} AND user_id = ${userId}
-    `
-    // Триггер auto_delete_orphan_user сработает автоматически если нужно
-
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
-      VALUES (${req.user.id}, ${req.user.login}, 'remove_user_from_group', 'user', ${userId}, ${groupId},
-              ${JSON.stringify({ login: member.login, role: member.role })})
-    `
+    await db`DELETE FROM user_groups WHERE group_id = ${req.params.groupId} AND user_id = ${req.params.userId}`
     return { ok: true }
   })
 
-  // POST /api/admin/groups/:groupId/import-from/:sourceGroupId
-  app.post('/admin/groups/:groupId/import-from/:sourceGroupId', {
-    onRequest: [authenticate],
-    schema: {
-      params: {
-        type: 'object',
-        properties: {
-          groupId: { type: 'string', format: 'uuid' },
-          sourceGroupId: { type: 'string', format: 'uuid' }
-        },
-        required: ['groupId', 'sourceGroupId']
-      }
-    }
-  }, async (req, reply) => {
+  app.patch('/admin/groups/:groupId/users/:userId', {
+    onRequest: [authenticate, requireGroupAdmin],
+    schema: { body: { type: 'object', properties: { description: { type: 'string', maxLength: 500 } } } }
+  }, async (req) => {
     const db = getDb()
-    const targetGroupId = req.params.groupId
-    const sourceGroupId = req.params.sourceGroupId
-
-    // Проверка прав на целевую группу (берется из req.params.groupId)
-    await requireGroupAdmin(req, reply);
-    if (reply.sent) return;
-
-    // Проверка прав на исходную группу – временно подменяем req.params
-    const originalParams = { ...req.params };
-    req.params = { groupId: sourceGroupId };
-    await requireGroupAdmin(req, reply);
-    if (reply.sent) return;
-    req.params = originalParams;
-
-
-    // Получить квоту целевой группы (для пользователей)
-    const [targetGroup] = await db`
-      SELECT user_quota FROM groups WHERE id = ${targetGroupId}
-    `
-    if (!targetGroup) return reply.code(404).send({ error: 'group_not_found' })
-
-    // Получить всех пользователей из исходной группы
-    const sourceUsers = await db`
-      SELECT user_id, role FROM user_groups WHERE group_id = ${sourceGroupId}
-    `
-
-    // Получить текущее количество пользователей (роль user) в целевой группе
-    const [{ count: currentUserCount }] = await db`
-      SELECT COUNT(*) as count FROM user_groups
-      WHERE group_id = ${targetGroupId} AND role = 'user'
-    `
-
-    let added = 0
-    let quotaSkipped = 0
-
-    for (const user of sourceUsers) {
-      // Проверить, не существует ли уже запись в целевой группе
-      const [existing] = await db`
-        SELECT 1 FROM user_groups
-        WHERE group_id = ${targetGroupId} AND user_id = ${user.user_id}
-      `
-      if (existing) continue
-
-      // Для пользователей с ролью 'user' проверить квоту
-      if (user.role === 'user') {
-        const quota = targetGroup.user_quota
-        if (quota > 0 && currentUserCount + added >= quota) {
-          quotaSkipped++
-          continue
-        }
-      }
-
-      // Вставить пользователя
-      await db`
-        INSERT INTO user_groups (user_id, group_id, role, created_by)
-        VALUES (${user.user_id}, ${targetGroupId}, ${user.role}, ${req.user.id})
-      `
-      added++
-    }
-
-    // Записать в журнал
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
-      VALUES (${req.user.id}, ${req.user.login}, 'import_users', 'group', ${targetGroupId}, ${sourceGroupId},
-              ${JSON.stringify({ sourceGroupId, added, quotaSkipped })})
-    `
-
-    return { ok: true, added, quotaSkipped }
-  })
-
-  // ── УПРАВЛЕНИЕ СЕССИЯМИ И ФЛАГАМИ ────────────────────────────
-
-  // POST /api/admin/users/:userId/password — смена пароля пользователя
-  app.post('/admin/users/:userId/password', {
-    onRequest: [authenticate, requireRole('admin', 'superadmin')],
-    schema: {
-      body: {
-        type: 'object',
-        required: ['password'],
-        properties: {
-          password: { type: 'string', minLength: 6 }
-        }
-      }
-    }
-  }, async (req, reply) => {
-    const db       = getDb()
-    const targetId = req.params.userId
-    const { password, groupId = null } = req.body
-
-    // Проверить права: только пользователи из своих групп
-    await assertCanManageUser(req.user, targetId, db)
-
-    const bcrypt = require('bcryptjs')
-    const hash   = await bcrypt.hash(password, 10)
-    const [targetUser2] = await db`SELECT login, role FROM users WHERE id = ${targetId}`
-    await db`UPDATE users SET password_hash = ${hash} WHERE id = ${targetId}`
-
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
-      VALUES (${req.user.id}, ${req.user.login}, 'reset_password', 'user', ${targetId},
-              ${groupId},
-              ${JSON.stringify({ login: targetUser2?.login, role: targetUser2?.role })})
-    `
+    await db`UPDATE user_groups SET description = ${req.body.description ?? null}
+             WHERE group_id = ${req.params.groupId} AND user_id = ${req.params.userId}`
     return { ok: true }
   })
 
-  // POST /api/admin/users/:userId/reset-sessions
-  app.post('/admin/users/:userId/reset-sessions', {
-    onRequest: [authenticate, requireRole('admin', 'superadmin')]
-  }, async (req, reply) => {
-    const db = getDb()
-    const targetId = req.params.userId
-    const groupId  = req.body?.groupId || null
+  // ── УСТРОЙСТВО ESP ────────────────────────────────────────────
 
-    // Проверить права доступа к пользователю
-    await assertCanManageUser(req.user, targetId, db)
-
-    const [targetUser] = await db`SELECT login, role FROM users WHERE id = ${targetId}`
-    await resetUserSessions(targetId, req.user.id)
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, group_id, payload)
-      VALUES (${req.user.id}, ${req.user.login}, 'reset_sessions', 'user', ${targetId},
-              ${groupId},
-              ${JSON.stringify({ login: targetUser?.login, role: targetUser?.role })})
-    `
-    return { ok: true }
-  })
-
-  // PATCH /api/admin/users/:userId/single-session
-  app.patch('/admin/users/:userId/single-session', {
-    onRequest: [authenticate, requireRole('admin', 'superadmin')],
-    schema: {
-      body: {
-        type: 'object',
-        required: ['single_session'],
-        properties: {
-          single_session: { type: 'boolean' }
-        }
-      }
-    }
-  }, async (req, reply) => {
-    const db = getDb()
-    const targetId      = req.params.userId
-    const { single_session } = req.body
-
-    await assertCanManageUser(req.user, targetId, db)
-
-    // Если сам ограничен — может управлять только своими пользователями
-    // но не может СНЯТЬ ограничение (только установить)
-    const [actor] = await db`SELECT single_session FROM users WHERE id = ${req.user.id}`
-    if (actor.single_session && !single_session && req.user.role !== 'superadmin') {
-      return reply.code(403).send({ error: 'cannot_remove_restriction' })
-    }
-
-    const [updated] = await db`
-      UPDATE users SET single_session = ${single_session}, updated_at = NOW()
-      WHERE id = ${targetId} AND role != 'superadmin'
-      RETURNING id, login, single_session
-    `
-    if (!updated) return reply.code(404).send({ error: 'not_found' })
-
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id, payload)
-      VALUES (${req.user.id}, ${req.user.login}, 'update_single_session', 'user', ${targetId},
-              ${JSON.stringify({ single_session })})
-    `
-    return { ok: true, ...updated }
-  })
-
-  // ── УСТРОЙСТВА ESP ────────────────────────────────────────────
-
-  // POST /api/admin/groups/:id/trigger — управление реле (для администратора)
-  // Body: { relay: 0 }  — индекс реле (опционально, по умолчанию 0)
-  app.post('/admin/groups/:id/trigger', {
-    onRequest: [authenticate],
-    schema: {
-      body: {
-        type: 'object',
-        properties: {
-          relay: { type: 'integer', minimum: 0, maximum: 7, default: 0 }
-        }
-      }
-    }
-  }, async (req, reply) => {
-    const db      = getDb()
-    const groupId = req.params.id
-
-    await requireGroupAdmin(req, reply)
-    if (reply.sent) return
-
-    // Найти группу и устройство привязанное к ней
-    const [group] = await db`
-      SELECT g.id, g.name, g.mqtt_topic, g.relay_duration_ms,
-             dg.device_id, dg.relay_index
-      FROM groups g
-      LEFT JOIN device_groups dg ON dg.group_id = g.id
-      WHERE g.id = ${groupId}
-      LIMIT 1
-    `
-    if (!group) return reply.code(404).send({ error: 'not_found' })
-    if (!group.device_id) return reply.code(503).send({ error: 'no_device' })
-
-    // Определить действие
-    let action, newState
-    if (group.relay_duration_ms === 0) {
-      const [last] = await db`
-        SELECT payload->>'state' as state FROM event_log
-        WHERE group_id = ${groupId} AND action = 'relay_trigger'
-        ORDER BY ts DESC LIMIT 1
-      `
-      newState = last?.state === 'on' ? 'off' : 'on'
-      action   = newState
-    } else {
-      newState = 'pulse'
-      action   = 'pulse'
-    }
-
-    // Команда на устройство: {group, action, duration?}
-    const cmd = {
-      group:    group.mqtt_topic,
-      action,
-      ...(action === 'pulse' ? { duration: group.relay_duration_ms } : {}),
-    }
-
-    const topic = `$devices/${group.device_id}/commands`
-    try {
-      const mqttClient = app.mqtt
-      if (mqttClient && mqttClient.connected) {
-        mqttClient.publish(topic, JSON.stringify(cmd), { qos: 1 })
-      }
-    } catch (err) {
-      console.error('[mqtt] publish error:', err.message)
-    }
-
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, group_id, payload)
-      VALUES (${req.user.id}, ${req.user.login}, 'relay_trigger', ${groupId},
-              ${JSON.stringify({ ...cmd, state: newState, device_id: group.device_id })})
-    `
-    return { ok: true, state: newState }
-  })
-
-  // POST /api/admin/groups/:id/device-token — генерация кода привязки ESP
   app.post('/admin/groups/:id/device-token', {
     onRequest: [authenticate, requireGroupAdmin]
-  }, async (req, reply) => {
-    const db = getDb()
-    const groupId = req.params.id
+  }, async (req) => {
+    const db        = getDb()
+    const groupId   = req.params.id
     const code      = Math.floor(100000 + Math.random() * 900000).toString()
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
-
     await db`
       INSERT INTO device_tokens (group_id, code, expires_at, created_by)
       VALUES (${groupId}, ${code}, ${expiresAt}, ${req.user.id})
       ON CONFLICT (group_id) DO UPDATE
-        SET code = ${code}, expires_at = ${expiresAt},
-            created_by = ${req.user.id}, created_at = NOW()
-    `
-    await db`
-      INSERT INTO event_log (actor_id, actor_login, action, target_type, target_id)
-      VALUES (${req.user.id}, ${req.user.login}, 'generate_device_token', 'group', ${groupId})
+        SET code = ${code}, expires_at = ${expiresAt}, created_by = ${req.user.id}, created_at = NOW()
     `
     return { ok: true, code, expires_at: expiresAt }
   })
 
-  // GET /api/admin/groups/:id/device — статус устройства группы
   app.get('/admin/groups/:id/device', {
     onRequest: [authenticate, requireGroupAdmin]
   }, async (req) => {
     const db = getDb()
     const [device] = await db`
-      SELECT d.device_id, d.fw_version, d.last_seen, d.registered_at,
-             dg.relay_index,
-             dt.code        as pending_code,
-             dt.expires_at  as code_expires_at,
-             d.is_online
+      SELECT d.device_id, d.fw_version, d.last_seen, d.registered_at, d.is_online,
+             dt.code AS pending_code, dt.expires_at AS code_expires_at
       FROM groups g
-      LEFT JOIN device_groups dg ON dg.group_id = g.id
-      LEFT JOIN devices d ON d.device_id = dg.device_id
+      LEFT JOIN devices d ON d.group_id = g.id
       LEFT JOIN device_tokens dt ON dt.group_id = g.id AND dt.expires_at > NOW()
       WHERE g.id = ${req.params.id}
-      ORDER BY d.last_seen DESC NULLS LAST
       LIMIT 1
     `
-    return device || { device_id: null, is_online: false }
+    if (!device?.device_id) {
+      return { device_id: null, is_online: false, pending_code: device?.pending_code || null }
+    }
+    const relays = await db`
+      SELECT id, relay_index, name, duration_ms, last_state
+      FROM relays WHERE device_id = ${device.device_id}
+      ORDER BY relay_index
+    `
+    return { ...device, relays }
+  })
+
+  // ── СЕССИИ / ПАРОЛЬ / ФЛАГИ ───────────────────────────────────
+
+  app.post('/admin/users/:userId/reset-sessions', {
+    onRequest: [authenticate, requireRole('admin', 'superadmin')]
+  }, async (req) => {
+    await assertCanManageUser(req.user, req.params.userId, getDb())
+    await resetUserSessions(req.params.userId, req.user.id)
+    return { ok: true }
+  })
+
+  app.post('/admin/users/:userId/password', {
+    onRequest: [authenticate, requireRole('admin', 'superadmin')],
+    schema: { body: { type: 'object', required: ['password'], properties: { password: { type: 'string', minLength: 6 } } } }
+  }, async (req) => {
+    const db = getDb()
+    await assertCanManageUser(req.user, req.params.userId, db)
+    const bcrypt = require('bcryptjs')
+    await db`UPDATE users SET password_hash = ${await bcrypt.hash(req.body.password, 10)} WHERE id = ${req.params.userId}`
+    return { ok: true }
+  })
+
+  app.patch('/admin/users/:userId/single-session', {
+    onRequest: [authenticate, requireRole('admin', 'superadmin')],
+    schema: { body: { type: 'object', required: ['single_session'], properties: { single_session: { type: 'boolean' } } } }
+  }, async (req, reply) => {
+    const db = getDb()
+    await assertCanManageUser(req.user, req.params.userId, db)
+    const [actor] = await db`SELECT single_session FROM users WHERE id = ${req.user.id}`
+    if (actor.single_session && !req.body.single_session && req.user.role !== 'superadmin') {
+      return reply.code(403).send({ error: 'cannot_remove_restriction' })
+    }
+    await db`UPDATE users SET single_session = ${req.body.single_session}, updated_at = NOW()
+             WHERE id = ${req.params.userId} AND role != 'superadmin'`
+    return { ok: true }
   })
 
   // ── ЖУРНАЛ ────────────────────────────────────────────────────
 
-  // GET /api/admin/groups/:groupId/logs
   app.get('/admin/groups/:groupId/logs', {
     onRequest: [authenticate, requireGroupAdmin],
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: {
-          limit:  { type: 'integer', default: 50, maximum: 200 },
-          offset: { type: 'integer', default: 0 }
-        }
-      }
-    }
+    schema: { querystring: { type: 'object', properties: {
+      limit:  { type: 'integer', default: 50, maximum: 200 },
+      offset: { type: 'integer', default: 0 }
+    }}}
   }, async (req) => {
     const db = getDb()
     const { limit = 50, offset = 0 } = req.query
     return db`
-      SELECT el.id, el.action, el.actor_login, el.target_type,
-             el.target_id, el.payload, el.ip, el.ts,
-             u.role as actor_role
+      SELECT el.id, el.action, el.actor_login, el.payload, el.ts,
+             r.name AS relay_name
       FROM event_log el
-      LEFT JOIN users u ON u.id = el.actor_id
+      LEFT JOIN relays r ON r.id = el.relay_id
       WHERE el.group_id = ${req.params.groupId}
-      ORDER BY el.ts DESC
-      LIMIT ${limit} OFFSET ${offset}
+      ORDER BY el.ts DESC LIMIT ${limit} OFFSET ${offset}
     `
+  })
+
+  // ── ИМПОРТ ПОЛЬЗОВАТЕЛЕЙ ──────────────────────────────────────
+
+  app.post('/admin/groups/:groupId/import-from/:sourceGroupId', {
+    onRequest: [authenticate, requireGroupAdmin]
+  }, async (req, reply) => {
+    const db            = getDb()
+    const targetGroupId = req.params.groupId
+    const sourceGroupId = req.params.sourceGroupId
+    const [targetGroup] = await db`SELECT user_quota FROM groups WHERE id = ${targetGroupId}`
+    if (!targetGroup) return reply.code(404).send({ error: 'group_not_found' })
+    const sourceUsers = await db`SELECT user_id, role FROM user_groups WHERE group_id = ${sourceGroupId}`
+    const [{ count }] = await db`SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${targetGroupId} AND role = 'user'`
+    let added = 0, quotaSkipped = 0
+    for (const u of sourceUsers) {
+      const [exists] = await db`SELECT 1 FROM user_groups WHERE group_id = ${targetGroupId} AND user_id = ${u.user_id}`
+      if (exists) continue
+      if (u.role === 'user' && targetGroup.user_quota > 0 && parseInt(count) + added >= targetGroup.user_quota) {
+        quotaSkipped++; continue
+      }
+      await db`INSERT INTO user_groups (user_id, group_id, role, created_by) VALUES (${u.user_id}, ${targetGroupId}, ${u.role}, ${req.user.id})`
+      added++
+    }
+    return { ok: true, added, quotaSkipped }
   })
 }
 
-// ── Вспомогательная: проверить что actor может управлять target ─
-// Логика single_session:
-//   superadmin     → может управлять всеми
-//   admin без флага → может управлять всеми в своих группах + созданными им
-//   admin с флагом  → только своими пользователями (created_by = actor.id)
 async function assertCanManageUser(actor, targetId, db) {
   if (actor.role === 'superadmin') return
-
-  // Проверить что target находится в одной из групп actor
   const [shared] = await db`
-    SELECT ug2.user_id FROM user_groups ug1
+    SELECT 1 FROM user_groups ug1
     JOIN user_groups ug2 ON ug2.group_id = ug1.group_id
-    WHERE ug1.user_id = ${actor.id} AND ug1.role = 'admin'
-      AND ug2.user_id = ${targetId}
+    WHERE ug1.user_id = ${actor.id} AND ug1.role = 'admin' AND ug2.user_id = ${targetId}
     LIMIT 1
   `
-
-  if (!shared) {
-    const err = new Error('forbidden')
-    err.statusCode = 403
-    throw err
-  }
-
-  // Если actor ограничен — может управлять только созданными им
-  if (actor.single_session) {
-    const [target] = await db`SELECT created_by FROM users WHERE id = ${targetId}`
-    if (!target || target.created_by !== actor.id) {
-      const err = new Error('forbidden')
-      err.statusCode = 403
-      throw err
-    }
-  }
+  if (!shared) { const e = new Error('forbidden'); e.statusCode = 403; throw e }
 }
 
 module.exports = adminRoutes
