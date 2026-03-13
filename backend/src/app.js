@@ -25,6 +25,7 @@ async function buildApp() {
   if (process.env.RUN_MIGRATIONS === 'true') await migrate()
 
   const mqttClient = await require('./mqtt/client').connect()
+  require('./scheduler').startScheduler()
   fastify.decorate('mqtt', mqttClient)
 
   const prefix = { prefix: '/janitor/api' }

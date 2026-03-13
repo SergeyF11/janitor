@@ -12,7 +12,7 @@ async function userRoutes(app) {
 
     const groups = await db`
       SELECT
-        g.id, g.name, g.mqtt_topic, g.status, g.expires_at,
+        g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.blocked_at,
         ug.role, ug.description,
         d.device_id,
         COALESCE(d.is_online, false) AS device_online
@@ -20,8 +20,8 @@ async function userRoutes(app) {
       JOIN user_groups ug ON ug.group_id = g.id
       LEFT JOIN devices d ON d.group_id = g.id
       WHERE ug.user_id = ${req.user.id}
-        AND g.status = 'active'
-        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
+        AND g.status IN ('active', 'blocked')
+        AND (g.expires_at IS NULL OR g.expires_at > NOW() - INTERVAL '7 months')
       ORDER BY g.name
     `
 
@@ -50,20 +50,34 @@ async function userRoutes(app) {
 
     const [relay] = await db`
       SELECT r.id, r.name, r.duration_ms, r.device_id, r.last_state,
-             d.mqtt_user, d.is_online,
-             g.id AS group_id
+             d.mqtt_user, COALESCE(d.is_online, false) AS is_online,
+             g.id AS group_id, g.status AS group_status
       FROM relays r
       JOIN devices d ON d.device_id = r.device_id
       JOIN groups  g ON g.id = d.group_id
       JOIN user_groups ug ON ug.group_id = g.id
       WHERE r.id = ${relayId}
         AND ug.user_id = ${req.user.id}
-        AND g.status = 'active'
-        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
       LIMIT 1
     `
 
-    if (!relay)           return reply.code(404).send({ error: 'not_found' })
+    if (!relay) return reply.code(404).send({ error: 'not_found' })
+
+    // Проверка: группа заблокирована или истёк льготный период
+    const now = new Date()
+    const graceUntil = relay.grace_until ? new Date(relay.grace_until) : null
+    const expiresAt  = relay.expires_at  ? new Date(relay.expires_at)  : null
+    const blocked = relay.group_status === 'blocked'
+      || (expiresAt && expiresAt < now && (!graceUntil || graceUntil < now))
+    if (blocked) {
+      await db`
+        INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload, ip)
+        VALUES ('relay_trigger_blocked', ${req.user.id}, ${req.user.login},
+                ${relay.group_id}, ${relayId},
+                ${{ relay: relay.name, reason: 'group_blocked' }}, ${req.ip})
+      `
+      return reply.code(403).send({ error: 'group_blocked' })
+    }
     if (!relay.device_id) return reply.code(503).send({ error: 'no_device' })
     if (!relay.is_online) return reply.code(503).send({ error: 'device_offline' })
 

@@ -21,7 +21,6 @@ export default function SuperAdmin({ user, onLogout }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState(null)
-  const [pendingCreds, setPendingCreds] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -59,7 +58,7 @@ export default function SuperAdmin({ user, onLogout }) {
     if (tab === 'stats') return <StatsTab data={data} />
     const arr = Array.isArray(data) ? data : []
     if (tab === 'admins')  return <AdminsTab  data={arr} reload={load} />
-    if (tab === 'groups')  return <GroupsTab  data={arr} reload={load} onCreds={setPendingCreds} />
+    if (tab === 'groups')  return <GroupsTab  data={arr} reload={load} />
     if (tab === 'users')   return <UsersTab />  
     if (tab === 'devices') return <DevicesTab data={arr} reload={load} />
     if (tab === 'logs')    return <LogsTab    data={arr} reload={load} />
@@ -68,17 +67,6 @@ export default function SuperAdmin({ user, onLogout }) {
 
   return (
     <div className="sa-screen">
-      {pendingCreds && (
-        <div className="sa-creds-modal">
-          <div className="sa-creds-box">
-            <div className="sa-creds-title">✅ Группа создана. Данные администратора:</div>
-            <div className="sa-creds-row"><b>Логин:</b> <code>{pendingCreds.login}</code></div>
-            <div className="sa-creds-row"><b>Пароль:</b> <code>{pendingCreds.password}</code></div>
-            <div className="sa-creds-hint">Сохраните пароль — он больше не будет показан.</div>
-            <button className="btn btn-primary" onClick={() => setPendingCreds(null)}>Понятно</button>
-          </div>
-        </div>
-      )}
       <header className="sa-header">
         <h1 className="sa-title">⚙️ Суперадмин</h1>
         <div className="sa-header-right">
@@ -266,22 +254,123 @@ function AdminsTab({ data, reload }) {
   )
 }
 
+// ── Бейдж / редактор срока действия группы ───────────────────
+function ExpiryBadge({ group, onUpdated }) {
+  const [open,    setOpen]    = useState(false)
+  const [value,   setValue]   = useState('')
+  const [saving,  setSaving]  = useState(false)
+  const [error,   setError]   = useState(null)
 
-// ── Транслитерация для mqtt_topic ─────────────────────────────
-function toMqttTopic(str) {
-  const map = {
-    'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh',
-    'з':'z','и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o',
-    'п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts',
-    'ч':'ch','ш':'sh','щ':'sch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya',
+  const now         = new Date()
+  const expiresAt   = group.expires_at  ? new Date(group.expires_at)  : null
+  const graceUntil  = group.grace_until ? new Date(group.grace_until) : null
+  const isBlocked   = group.status === 'blocked'
+  const inGrace     = expiresAt && expiresAt < now && graceUntil && graceUntil > now
+
+  // Визуальный класс бейджа
+  let cls  = 'badge-expiry expiry-none'
+  let label = '∞ бессрочно'
+  if (isBlocked) {
+    cls   = 'badge-expiry expiry-blocked'
+    label = '🔒 заблокировано'
+  } else if (inGrace) {
+    const days = Math.max(0, Math.ceil((graceUntil - now) / 86400000))
+    cls   = 'badge-expiry expiry-grace'
+    label = `⚠️ осталось ${days} дн.`
+  } else if (expiresAt && expiresAt > now) {
+    const days = Math.ceil((expiresAt - now) / 86400000)
+    cls   = 'badge-expiry expiry-set'
+    label = `📅 ${days} дн.`
   }
-  return str.toLowerCase()
-    .split('').map(c => map[c] !== undefined ? map[c] : (/[a-z0-9]/.test(c) ? c : '_'))
-    .join('').replace(/_+/g, '_').replace(/^_|_$/g, '').substring(0, 32) || 'group'
+
+  function openPicker() {
+    // Предзаполнить текущим expires_at или +1 год
+    const base = expiresAt && expiresAt > now ? expiresAt : new Date(now.getTime() + 365 * 86400000)
+    setValue(base.toISOString().slice(0, 16))
+    setError(null)
+    setOpen(true)
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const newExpiry = value ? new Date(value).toISOString() : null
+      await saUpdateGroup(group.id, { expires_at: newExpiry })
+      setOpen(false)
+      onUpdated()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleClear() {
+    if (!confirm('Снять срок действия? Группа станет бессрочной.')) return
+    setSaving(true)
+    try {
+      await saUpdateGroup(group.id, { expires_at: null })
+      setOpen(false)
+      onUpdated()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      <span
+        className={cls}
+        title={expiresAt ? `Срок: ${expiresAt.toLocaleDateString('ru')}` : 'Срок не задан'}
+        style={{ cursor: 'pointer' }}
+        onClick={openPicker}
+      >
+        {label}
+      </span>
+
+      {open && (
+        <div className='expiry-popup' onClick={e => e.stopPropagation()}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Срок действия группы</div>
+          <input
+            type='datetime-local'
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            style={{
+              background: 'var(--bg)',
+              border: '1px solid var(--border)',
+              color: 'var(--text)',
+              borderRadius: 6,
+              padding: '4px 8px',
+              fontSize: 13,
+              width: '100%',
+              marginBottom: 8,
+            }}
+          />
+          {error && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 6 }}>{error}</div>}
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className='btn btn-primary btn-xs' onClick={handleSave} disabled={saving || !value}>
+              {saving ? '...' : '✓ Сохранить'}
+            </button>
+            {expiresAt && (
+              <button className='btn btn-outline btn-xs' onClick={handleClear} disabled={saving}>
+                ✕ Снять
+              </button>
+            )}
+            <button className='btn btn-outline btn-xs' onClick={() => setOpen(false)} disabled={saving}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
 
 // ── Группы ────────────────────────────────────────────────────
-function GroupsTab({ data, reload, onCreds }) {
+function GroupsTab({ data, reload }) {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm]     = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
   const [assignId, setAssignId]       = useState({})   // groupId → selected adminId
@@ -313,17 +402,17 @@ function GroupsTab({ data, reload, onCreds }) {
     }
   }
 
+  const [newAdmin, setNewAdmin] = useState(null)  // { login, password } после создания группы
+
   async function handleCreate(e) {
     e.preventDefault()
     setSaving(true); setErr(null)
     try {
       const result = await saCreateGroup(form)
-      setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0, _topic_edited: false })
+      setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
       setShowCreate(false)
+      if (result.admin_login) setNewAdmin({ login: result.admin_login, password: result.admin_password })
       reload()
-      if (result && result.admin_login) {
-        onCreds({ login: result.admin_login, password: result.admin_password })
-      }
     } catch (e) {
       setErr(e.message === 'mqtt_topic_taken' ? 'MQTT топик занят.' : 'Ошибка: ' + e.message)
     } finally { setSaving(false) }
@@ -336,7 +425,10 @@ function GroupsTab({ data, reload, onCreds }) {
 
   async function handleToggleStatus(g) {
     const newStatus = g.status === 'active' ? 'blocked' : 'active'
-    try { await saUpdateGroup(g.id, { status: newStatus }); reload() } catch (e) { alert(e.message) }
+    const patch = newStatus === 'active'
+      ? { status: 'active', blocked_at: null }
+      : { status: 'blocked' }
+    try { await saUpdateGroup(g.id, patch); reload() } catch (e) { alert(e.message) }
   }
 
   async function handleAssignAdmin(groupId) {
@@ -359,6 +451,28 @@ function GroupsTab({ data, reload, onCreds }) {
 
   return (
     <div className="sa-tab">
+      {newAdmin && (
+        <div className="modal-overlay" onClick={() => setNewAdmin(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <h3>✅ Группа создана</h3>
+            <p>Администратор группы создан автоматически:</p>
+            <div className="credentials-row">
+              <span className="cred-label">Логин:</span>
+              <code className="cred-value">{newAdmin.login}</code>
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => navigator.clipboard.writeText(newAdmin.login)}>📋</button>
+            </div>
+            <div className="credentials-row">
+              <span className="cred-label">Пароль:</span>
+              <code className="cred-value">{newAdmin.password}</code>
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => navigator.clipboard.writeText(newAdmin.password)}>📋</button>
+            </div>
+            <p className="cred-hint">⚠️ Сохраните пароль — он больше не будет показан</p>
+            <button className="btn btn-primary" onClick={() => setNewAdmin(null)}>Закрыть</button>
+          </div>
+        </div>
+      )}
       <div className="sa-toolbar">
         <button className="btn btn-primary btn-sm" onClick={() => setShowCreate(v => !v)}>
           {showCreate ? 'Отмена' : '+ Создать группу'}
@@ -373,19 +487,31 @@ function GroupsTab({ data, reload, onCreds }) {
               <input value={form.name}
                      onChange={e => {
                        const name = e.target.value
-                       setForm(f => ({
-                         ...f,
-                         name,
-                         mqtt_topic: f._topic_edited ? f.mqtt_topic : toMqttTopic(name)
-                       }))
+                       const slug = name
+                         .toLowerCase()
+                         .replace(/[ёе]/g,'e').replace(/[й]/g,'y').replace(/[ц]/g,'ts')
+                         .replace(/[у]/g,'u').replace(/[к]/g,'k').replace(/[н]/g,'n')
+                         .replace(/[г]/g,'g').replace(/[ш]/g,'sh').replace(/[щ]/g,'sch')
+                         .replace(/[з]/g,'z').replace(/[х]/g,'h').replace(/[ъъ]/g,'')
+                         .replace(/[ф]/g,'f').replace(/[ы]/g,'y').replace(/[б]/g,'b')
+                         .replace(/[а]/g,'a').replace(/[п]/g,'p').replace(/[р]/g,'r')
+                         .replace(/[о]/g,'o').replace(/[л]/g,'l').replace(/[д]/g,'d')
+                         .replace(/[ж]/g,'zh').replace(/[э]/g,'e').replace(/[я]/g,'ya')
+                         .replace(/[ч]/g,'ch').replace(/[с]/g,'s').replace(/[м]/g,'m')
+                         .replace(/[и]/g,'i').replace(/[т]/g,'t').replace(/[ь]/g,'')
+                         .replace(/[в]/g,'v').replace(/[ю]/g,'yu').replace(/[ъ]/g,'')
+                         .replace(/[^a-z0-9]+/g, '_')
+                         .replace(/^_+|_+$/g, '')
+                       setForm(f => ({ ...f, name, mqtt_topic: slug }))
                      }}
                      required />
             </div>
             <div className="field">
-              <label>MQTT топик (авто)</label>
+              <label>MQTT топик</label>
               <input value={form.mqtt_topic}
-                     onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value, _topic_edited: true }))}
-                     placeholder="авто из названия" />
+                     onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value }))}
+                     placeholder="авто из названия"
+                     required />
             </div>
             <div className="field">
               <label>Длит. реле мс (0=триггер)</label>
@@ -445,6 +571,7 @@ function GroupsTab({ data, reload, onCreds }) {
                 </span>
               )}
               <span className={`badge-status ${g.status}`}>{g.status}</span>
+              <ExpiryBadge group={g} onUpdated={reload} />
               <span className="sa-row-meta">
                 {g.user_count} польз. · {g.admin_count} адм.
                 {g.user_quota > 0 && ` · квота: ${g.user_quota}`}
@@ -680,6 +807,41 @@ function DevicesTab({ data, reload }) {
 
 
 // ── Журнал ────────────────────────────────────────────────────
+const ACTION_LABELS = {
+  // Системные — планировщик
+  group_grace_started:  { icon: '⏳', label: 'Начало льготного периода' },
+  group_blocked:        { icon: '🔒', label: 'Группа заблокирована' },
+  group_data_deleted:   { icon: '🗑️', label: 'Данные группы удалены' },
+  group_reactivated:    { icon: '✅', label: 'Группа реактивирована' },
+  // Пользователи / реле
+  relay_trigger:        { icon: '⚡', label: 'Реле активировано' },
+  relay_trigger_blocked:{ icon: '🚫', label: 'Реле заблокировано (срок)' },
+  // Администрирование
+  user_created:         { icon: '👤', label: 'Пользователь создан' },
+  user_deleted:         { icon: '❌', label: 'Пользователь удалён' },
+  group_created:        { icon: '📁', label: 'Группа создана' },
+  group_deleted:        { icon: '🗂️', label: 'Группа удалена' },
+  user_added_to_group:  { icon: '➕', label: 'В группу добавлен' },
+  user_removed_from_group: { icon: '➖', label: 'Из группы удалён' },
+  login:                { icon: '🔑', label: 'Вход' },
+  logout:               { icon: '🚪', label: 'Выход' },
+  password_changed:     { icon: '🔐', label: 'Смена пароля' },
+}
+
+function formatPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  const parts = []
+  if (payload.name)           parts.push(payload.name)
+  if (payload.expires_at)     parts.push(`до ${new Date(payload.expires_at).toLocaleDateString('ru')}`)
+  if (payload.grace_until)    parts.push(`льгота до ${new Date(payload.grace_until).toLocaleDateString('ru')}`)
+  if (payload.devices_deleted !== undefined) parts.push(`устройств: ${payload.devices_deleted}`)
+  if (payload.users_deleted   !== undefined) parts.push(`пользователей: ${payload.users_deleted}`)
+  if (payload.relay)          parts.push(`реле: ${payload.relay}`)
+  if (payload.by)             parts.push(`кем: ${payload.by}`)
+  if (parts.length) return parts.join(' · ')
+  return JSON.stringify(payload).substring(0, 80)
+}
+
 function LogsTab({ data, reload }) {
   return (
     <div className="sa-tab">
@@ -689,20 +851,18 @@ function LogsTab({ data, reload }) {
       <div className="logs-list">
         {data.length === 0 && <div className="empty-state">Нет событий</div>}
         {data.map(l => {
-          let p = {}
-          try { p = typeof l.payload === 'string' ? JSON.parse(l.payload) : (l.payload || {}) } catch {}
-          const hasPayload = Object.keys(p).length > 0
+          const meta = ACTION_LABELS[l.action] || { icon: '·', label: l.action }
+          const payloadStr = formatPayload(l.payload)
+          const isSystem = ['group_grace_started','group_blocked','group_data_deleted','group_reactivated'].includes(l.action)
           return (
-            <div key={l.id} className="log-entry">
+            <div key={l.id} className={`log-entry${isSystem ? ' log-system' : ''}`}>
               <span className="log-ts">{new Date(l.ts).toLocaleString('ru')}</span>
-              <span className="log-actor">{l.actor_login || '—'}</span>
-              <span className={`log-action action-${l.action}`}>{l.action}</span>
+              <span className="log-icon">{meta.icon}</span>
+              <span className={`log-action action-${l.action}`}>{meta.label}</span>
               {l.group_name && <span className="log-group">{l.group_name}</span>}
-              {hasPayload && (
-                <span className="log-payload">
-                  {Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(' · ')}
-                </span>
-              )}
+              {l.actor_login && !isSystem && <span className="log-actor">{l.actor_login}</span>}
+              {isSystem && <span className="log-actor" style={{ color: 'var(--text2)', fontStyle: 'italic' }}>система</span>}
+              {payloadStr && <span className="log-payload">{payloadStr}</span>}
               {l.ip && <span className="log-ip">{l.ip}</span>}
             </div>
           )
