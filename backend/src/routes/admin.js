@@ -134,7 +134,7 @@ async function adminRoutes(app) {
       INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload)
       VALUES ('relay_trigger', ${req.user.id}, ${req.user.login},
               ${relay.group_id}, ${relay.id},
-              ${JSON.stringify({ relay: relay.name, action, state: newState, by: 'admin' })})
+              ${ {relay: relay.name, action, state: newState, by: 'admin'} })
     `
     return { ok: true, state: newState }
   })
@@ -190,16 +190,23 @@ async function adminRoutes(app) {
       }
     }
 
+    // Администратор с single_session не может создавать мультисессионных
+    const [creator] = await db`SELECT single_session FROM users WHERE id = ${req.user.id}`
+    const forceSingleSession = creator?.single_session === true
+
     let targetUserId
     if (user_id) {
-      const [existing] = await db`SELECT id, role FROM users WHERE id = ${user_id}`
+      const [existing] = await db`SELECT id, role, single_session FROM users WHERE id = ${user_id}`
       if (!existing) return reply.code(404).send({ error: 'user_not_found' })
       if (existing.role === 'superadmin') return reply.code(403).send({ error: 'forbidden' })
+      // Если создатель single_session — существующий пользователь тоже должен быть
+      if (forceSingleSession && !existing.single_session) {
+        return reply.code(403).send({ error: 'cannot_add_multisession_user' })
+      }
       targetUserId = user_id
     } else {
       if (!login || !password) return reply.code(400).send({ error: 'login_and_password_required' })
-      const [creator] = await db`SELECT single_session FROM users WHERE id = ${req.user.id}`
-      single_session = role === 'user' ? true : (creator?.single_session ? true : (single_session ?? true))
+      single_session = (role === 'user' || forceSingleSession) ? true : (single_session ?? true)
 
       if (role === 'user') {
         const [taken] = await db`
@@ -336,7 +343,9 @@ async function adminRoutes(app) {
     const db = getDb()
     const { limit = 50, offset = 0 } = req.query
     return db`
-      SELECT el.id, el.action, el.actor_login, el.payload, el.ts,
+      SELECT el.id, el.action, el.actor_login,
+             el.payload,
+             el.ts,
              r.name AS relay_name
       FROM event_log el
       LEFT JOIN relays r ON r.id = el.relay_id

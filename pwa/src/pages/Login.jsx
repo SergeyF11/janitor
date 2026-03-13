@@ -15,9 +15,7 @@ export default function Login({ onSuccess }) {
       onSuccess(data)
     } catch (err) {
       if (err.message === 'session_exists') {
-        setError('Уже есть активная сессия. Обратитесь к администратору для сброса.')
-      } else if (err.message === 'device_mismatch') {
-        setError('Вход разрешён только с привязанного устройства. Обратитесь к администратору.')
+        setError('Уже есть активная сессия. Выйдите на другом устройстве.')
       } else if (err.message === 'user_inactive') {
         setError('Аккаунт заблокирован.')
       } else {
@@ -42,6 +40,7 @@ export default function Login({ onSuccess }) {
               type="text"
               autoComplete="username"
               autoCapitalize="off"
+              placeholder="логин@группа"
               value={form.login}
               onChange={e => setForm(f => ({ ...f, login: e.target.value }))}
               disabled={loading}

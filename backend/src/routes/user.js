@@ -87,7 +87,7 @@ async function userRoutes(app) {
       INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload)
       VALUES ('relay_trigger', ${req.user.id}, ${req.user.login},
               ${relay.group_id}, ${relayId},
-              ${JSON.stringify({ relay: relay.name, action, state: newState })})
+              ${ {relay: relay.name, action, state: newState} })
     `
 
     return { ok: true, state: newState }

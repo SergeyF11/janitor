@@ -348,7 +348,11 @@ function UsersTab({ group, groups, user: currentUser }) {
           <div key={u.id} className="user-card">
             <div className="user-card-main">
               <div className="user-info">
-                <span className="user-login">{u.login}</span>
+                <span className="user-login">
+                    {u.role === 'user'
+                      ? <>{u.login}<span style={{color:'var(--text2)'}}>@{group.mqtt_topic}</span></>
+                      : u.login}
+                  </span>
                 {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
                 <span className={`user-role role-${u.role}`}>{u.role}</span>
                 {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
@@ -377,6 +381,17 @@ function UsersTab({ group, groups, user: currentUser }) {
                 )}
               </div>
 
+              <div className="user-uid">
+                <span className="user-uid-label">Логин:</span>
+                <code className="user-uid-value">
+                  {u.role === 'user' ? u.login + '@' + group.mqtt_topic : u.login}
+                </code>
+                <button className="btn-copy"
+                  onClick={() => navigator.clipboard?.writeText(
+                    u.role === 'user' ? u.login + '@' + group.mqtt_topic : u.login
+                  )}
+                  title="Скопировать логин">📋</button>
+              </div>
               <div className="user-uid">
                 <span className="user-uid-label">ID:</span>
                 <code className="user-uid-value">{u.id}</code>
@@ -585,14 +600,27 @@ function LogsTab({ group }) {
     <div className="tab-content">
       <div className="logs-list">
         {logs.length === 0 && <div className="empty-state">Нет событий</div>}
-        {logs.map(l => (
-          <div key={l.id} className="log-entry">
-            <span className="log-ts">{new Date(l.ts).toLocaleString('ru')}</span>
-            <span className="log-actor">{l.actor_login || '—'}</span>
-            <span className={`log-action action-${l.action}`}>{l.action}</span>
-            {l.payload && <span className="log-payload">{JSON.stringify(l.payload).substring(0, 60)}</span>}
-          </div>
-        ))}
+        {logs.map(l => {
+          const payload = l.payload
+            ? (typeof l.payload === 'string'
+                ? (() => { try { return JSON.parse(l.payload) } catch { return l.payload } })()
+                : l.payload)
+            : null
+          const payloadStr = payload
+            ? (typeof payload === 'object'
+                ? Object.entries(payload).map(([k,v]) => `${k}: ${v}`).join(' · ')
+                : String(payload))
+            : null
+          return (
+            <div key={l.id} className="log-entry">
+              <span className="log-ts">{new Date(l.ts).toLocaleString('ru')}</span>
+              <span className="log-actor">{l.actor_login || '—'}</span>
+              <span className={`log-action action-${l.action}`}>{l.action}</span>
+              {l.relay_name && <span className="log-relay">{l.relay_name}</span>}
+              {payloadStr && <span className="log-payload">{payloadStr}</span>}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
