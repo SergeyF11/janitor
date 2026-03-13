@@ -3,6 +3,7 @@ require('dotenv').config()
 const fastify = require('fastify')({ logger: true })
 const { migrate } = require('./db/migrate')
 const { initDb } = require('./db/connection')
+const { startGroupLifecycleJob } = require('./services/groupLifecycle.service')
 
 async function buildApp() {
   await fastify.register(require('@fastify/cors'), { origin: process.env.CORS_ORIGIN || true, credentials: true })
@@ -26,6 +27,8 @@ async function buildApp() {
 
   const mqttClient = await require('./mqtt/client').connect()
   fastify.decorate('mqtt', mqttClient)
+
+  startGroupLifecycleJob(fastify)
 
   const prefix = { prefix: '/janitor/api' }
   await fastify.register(require('./routes/auth'),       prefix)

@@ -6,6 +6,7 @@ import {
   updateSingleSession, adminResetUserPassword, adminTriggerRelay,
   getGroupLogs, updateUserDescription, patchAdminRelay
 } from '../api'
+import ExpiryWarning from '../~components/ExpiryWarning'
 
 export default function Main({ user, onLogout }) {
   const [groups, setGroups]           = useState([])
@@ -103,6 +104,8 @@ export default function Main({ user, onLogout }) {
         </div>
       )}
 
+      <ExpiryWarning groups={groups} />
+
       <div className="groups-list">
         {groups.length === 0 && (
           <div className="empty-state">
@@ -144,6 +147,7 @@ export default function Main({ user, onLogout }) {
                   const isPulse = relay.duration_ms > 0
                   const isOn    = state === 'on'
                   const busy    = pressing[relay.id]
+                  const blocked = group.status === 'blocked'
                   return (
                     <button
                       key={relay.id}
@@ -154,7 +158,7 @@ export default function Main({ user, onLogout }) {
                         !online ? 'relay-offline' : '',
                       ].join(' ')}
                       onClick={() => handleTrigger(relay)}
-                      disabled={busy || !online}
+                      disabled={busy || !online || blocked}
                     >
                       {busy ? (
                         <span className="relay-btn-spinner" />
@@ -170,6 +174,7 @@ export default function Main({ user, onLogout }) {
                 })}
               </div>
 
+              {group.status === 'blocked' && <div className="group-offline-hint">Группа заблокирована суперадмином</div>}
               {!online && <div className="group-offline-hint">Устройство недоступно</div>}
             </div>
           )

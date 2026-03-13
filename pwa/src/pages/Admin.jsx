@@ -5,6 +5,7 @@ import {
   getGroupDevice, generateDeviceToken, adminTriggerRelay,
   getGroupLogs, logout, updateUserDescription
 } from '../api'
+import ExpiryWarning from '../~components/ExpiryWarning'
 
 export default function Admin({ user, onLogout }) {
   const [groups, setGroups]     = useState([])
@@ -42,6 +43,8 @@ export default function Admin({ user, onLogout }) {
           <button className="btn btn-outline btn-sm" onClick={handleLogout}>Выйти</button>
         </div>
       </header>
+
+      <ExpiryWarning groups={groups} />
 
       <div className="admin-layout">
         <aside className="groups-sidebar">
@@ -127,7 +130,8 @@ export default function Admin({ user, onLogout }) {
 //         </span>
 //       </div>
 
-//       {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
+//       {groupBlocked && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>Группа заблокирована: кнопки отключены.</div>}
+      {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
 
 //       {/* Кнопки реле */}
 //       <div className="relay-buttons">
@@ -197,6 +201,7 @@ function RelayView({ group }) {
   const hasDevice = !!device?.device_id;
   const isOnline  = device?.is_online;
   const relays    = device?.relays || [];
+  const groupBlocked = group.status === 'blocked';
 
   return (
     <div className="relay-view">
@@ -209,6 +214,7 @@ function RelayView({ group }) {
         </span>
       </div>
 
+      {groupBlocked && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>Группа заблокирована: кнопки отключены.</div>}
       {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
 
       {relays.length === 0 && hasDevice && (
@@ -234,7 +240,7 @@ function RelayView({ group }) {
                   !isOnline ? 'relay-offline' : '',
                 ].join(' ')}
                 onClick={() => handleTrigger(relay)}
-                disabled={busy || !hasDevice}
+                disabled={busy || !hasDevice || groupBlocked}
               >
                 {busy ? (
                   <span className="relay-btn-spinner" />

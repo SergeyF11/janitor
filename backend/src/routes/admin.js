@@ -23,7 +23,7 @@ async function adminRoutes(app) {
   }, async (req) => {
     const db = getDb()
     return db`
-      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.user_quota,
+      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.blocked_at, g.user_quota,
              COUNT(ug2.user_id) FILTER (WHERE ug2.role = 'user') AS user_count,
              d.device_id, d.is_online, d.fw_version, d.last_seen
       FROM groups g
@@ -100,9 +100,11 @@ async function adminRoutes(app) {
     const db = getDb()
     const [relay] = await db`
       SELECT r.id, r.name, r.duration_ms, r.device_id, r.last_state,
-             d.mqtt_user, d.group_id, d.is_online
+             d.mqtt_user, d.group_id, d.is_online,
+             g.status AS group_status, g.expires_at, g.grace_until
       FROM relays r
       JOIN devices d ON d.device_id = r.device_id
+      JOIN groups g ON g.id = d.group_id
       WHERE r.id = ${req.params.relayId}
     `
     if (!relay) return reply.code(404).send({ error: 'not_found' })
@@ -112,6 +114,13 @@ async function adminRoutes(app) {
       if (!m || m.role !== 'admin') return reply.code(403).send({ error: 'forbidden' })
     }
 
+    if (relay.group_status === 'blocked') {
+      await db`INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload)
+               VALUES ('relay_trigger_denied', ${req.user.id}, ${req.user.login}, ${relay.group_id}, ${relay.id}, ${{ reason: 'group_blocked' }})`
+      return reply.code(403).send({ error: 'group_blocked' })
+    }
+    if (relay.group_status === 'active' && relay.expires_at && new Date(relay.expires_at) <= new Date()) return reply.code(403).send({ error: 'group_expired' })
+    if (relay.group_status === 'grace' && relay.grace_until && new Date(relay.grace_until) <= new Date()) return reply.code(403).send({ error: 'group_expired' })
     if (!relay.is_online) return reply.code(503).send({ error: 'device_offline' })
 
     let action, newState

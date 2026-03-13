@@ -57,6 +57,7 @@ async function migrate() {
       status      TEXT NOT NULL DEFAULT 'active',
       expires_at  TIMESTAMPTZ,
       grace_until TIMESTAMPTZ,
+      blocked_at  TIMESTAMPTZ,
       user_quota  INTEGER NOT NULL DEFAULT 0,
       created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -149,6 +150,9 @@ async function migrate() {
     CREATE TRIGGER trg_auto_delete_orphan_user
     AFTER DELETE ON user_groups
     FOR EACH ROW EXECUTE FUNCTION auto_delete_orphan_user();
+
+    ALTER TABLE groups
+      ADD CONSTRAINT groups_status_check CHECK (status IN ('active', 'grace', 'blocked'));
 
   `)
 

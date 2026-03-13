@@ -5,6 +5,14 @@ const { deleteYcDevice } = require('./device')
 
 const isSuperAdmin = requireRole('superadmin')
 
+
+async function logSuperadminEvent(db, req, action, targetType, targetId, groupId = null, payload = null) {
+  await db`
+    INSERT INTO event_log (action, actor_id, actor_login, target_type, target_id, group_id, payload, ip)
+    VALUES (${action}, ${req.user.id}, ${req.user.login}, ${targetType}, ${targetId}, ${groupId}, ${payload}, ${req.ip || null})
+  `
+}
+
 async function superadminRoutes(app) {
 
   // ── АДМИНИСТРАТОРЫ ────────────────────────────────────────────
@@ -103,7 +111,7 @@ async function superadminRoutes(app) {
   app.get('/sa/groups', { onRequest: [authenticate, isSuperAdmin] }, async () => {
     const db = getDb()
     return db`
-      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until,
+      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.blocked_at,
              g.user_quota, g.created_at, g.updated_at,
              COUNT(ug.user_id) FILTER (WHERE ug.role = 'user')  as user_count,
              COUNT(ug.user_id) FILTER (WHERE ug.role = 'admin') as admin_count,
@@ -139,8 +147,11 @@ async function superadminRoutes(app) {
     if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
 
     const [group] = await db`
-      INSERT INTO groups (name, mqtt_topic, user_quota, expires_at, created_by)
-      VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expires_at || null}, ${req.user.id})
+      INSERT INTO groups (name, mqtt_topic, user_quota, expires_at, status, grace_until, blocked_at, created_by)
+      VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expires_at || null}, 'active',
+              CASE WHEN ${expires_at || null} IS NOT NULL THEN ${expires_at || null}::timestamptz + INTERVAL '1 month' ELSE NULL END,
+              NULL,
+              ${req.user.id})
       RETURNING *
     `
 
@@ -161,6 +172,13 @@ async function superadminRoutes(app) {
       ON CONFLICT DO NOTHING
     `
 
+    await logSuperadminEvent(db, req, 'sa_group_created', 'group', group.id, group.id, {
+      name: group.name,
+      mqtt_topic: group.mqtt_topic,
+      expires_at: group.expires_at,
+      grace_until: group.grace_until,
+    })
+
     return reply.code(201).send({
       ...group,
       admin_login:    adminLogin,
@@ -176,7 +194,7 @@ async function superadminRoutes(app) {
         properties: {
           name:        { type: 'string', minLength: 1, maxLength: 100 },
           user_quota:  { type: 'integer', minimum: 0 },
-          status:      { type: 'string', enum: ['active', 'blocked'] },
+          status:      { type: 'string', enum: ['active', 'grace', 'blocked'] },
           expires_at:  { type: 'string', format: 'date-time' },
           grace_until: { type: 'string', format: 'date-time' },
         }
@@ -186,11 +204,52 @@ async function superadminRoutes(app) {
     const db = getDb()
     const id = req.params.id
     const { name, user_quota, status, expires_at, grace_until } = req.body
-    if (name        !== undefined) await db`UPDATE groups SET name = ${name}, updated_at = NOW() WHERE id = ${id}`
-    if (user_quota  !== undefined) await db`UPDATE groups SET user_quota = ${user_quota}, updated_at = NOW() WHERE id = ${id}`
-    if (status      !== undefined) await db`UPDATE groups SET status = ${status}, updated_at = NOW() WHERE id = ${id}`
-    if (expires_at  !== undefined) await db`UPDATE groups SET expires_at = ${expires_at}, updated_at = NOW() WHERE id = ${id}`
-    if (grace_until !== undefined) await db`UPDATE groups SET grace_until = ${grace_until}, updated_at = NOW() WHERE id = ${id}`
+    const [before] = await db`SELECT id, status, expires_at, grace_until, blocked_at FROM groups WHERE id = ${id}`
+    if (!before) return reply.code(404).send({ error: 'not_found' })
+
+    if (name !== undefined) {
+      await db`UPDATE groups SET name = ${name}, updated_at = NOW() WHERE id = ${id}`
+    }
+    if (user_quota !== undefined) {
+      await db`UPDATE groups SET user_quota = ${user_quota}, updated_at = NOW() WHERE id = ${id}`
+    }
+
+    if (expires_at !== undefined) {
+      await db`
+        UPDATE groups
+        SET expires_at = ${expires_at},
+            grace_until = CASE WHEN ${expires_at} IS NOT NULL THEN ${expires_at}::timestamptz + INTERVAL '1 month' ELSE NULL END,
+            status = 'active',
+            blocked_at = NULL,
+            updated_at = NOW()
+        WHERE id = ${id}
+      `
+      await logSuperadminEvent(db, req, 'sa_group_expiry_updated', 'group', id, id, { expires_at })
+    }
+
+    if (grace_until !== undefined) {
+      await db`UPDATE groups SET grace_until = ${grace_until}, updated_at = NOW() WHERE id = ${id}`
+    }
+
+    if (status !== undefined) {
+      await db`
+        UPDATE groups
+        SET status = ${status},
+            blocked_at = CASE
+              WHEN ${status} = 'blocked' THEN COALESCE(blocked_at, NOW())
+              WHEN ${status} IN ('active', 'grace') THEN NULL
+              ELSE blocked_at
+            END,
+            updated_at = NOW()
+        WHERE id = ${id}
+      `
+    }
+
+    await logSuperadminEvent(db, req, 'sa_group_updated', 'group', id, id, {
+      changes: { name, user_quota, status, expires_at, grace_until },
+      previous: before,
+    })
+
     return { ok: true }
   })
 
@@ -199,6 +258,7 @@ async function superadminRoutes(app) {
     const [group] = await db`SELECT name FROM groups WHERE id = ${req.params.id}`
     if (!group) return reply.code(404).send({ error: 'not_found' })
     await db`DELETE FROM groups WHERE id = ${req.params.id}`
+    await logSuperadminEvent(db, req, 'sa_group_deleted', 'group', req.params.id, req.params.id, { name: group.name })
     return { ok: true }
   })
 

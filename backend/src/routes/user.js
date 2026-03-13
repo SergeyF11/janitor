@@ -12,7 +12,7 @@ async function userRoutes(app) {
 
     const groups = await db`
       SELECT
-        g.id, g.name, g.mqtt_topic, g.status, g.expires_at,
+        g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.blocked_at,
         ug.role, ug.description,
         d.device_id,
         COALESCE(d.is_online, false) AS device_online
@@ -20,8 +20,6 @@ async function userRoutes(app) {
       JOIN user_groups ug ON ug.group_id = g.id
       LEFT JOIN devices d ON d.group_id = g.id
       WHERE ug.user_id = ${req.user.id}
-        AND g.status = 'active'
-        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
       ORDER BY g.name
     `
 
@@ -58,12 +56,18 @@ async function userRoutes(app) {
       JOIN user_groups ug ON ug.group_id = g.id
       WHERE r.id = ${relayId}
         AND ug.user_id = ${req.user.id}
-        AND g.status = 'active'
-        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
+        AND (
+          (g.status = 'active' AND (g.expires_at IS NULL OR g.expires_at > NOW()))
+          OR (g.status = 'grace' AND g.grace_until > NOW())
+        )
       LIMIT 1
     `
 
-    if (!relay)           return reply.code(404).send({ error: 'not_found' })
+    if (!relay) {
+      await db`INSERT INTO event_log (action, actor_id, actor_login, payload)
+               VALUES ('relay_trigger_denied', ${req.user.id}, ${req.user.login}, ${{ reason: 'not_found_or_restricted', relay_id: relayId }})`
+      return reply.code(404).send({ error: 'not_found' })
+    }
     if (!relay.device_id) return reply.code(503).send({ error: 'no_device' })
     if (!relay.is_online) return reply.code(503).send({ error: 'device_offline' })
 
