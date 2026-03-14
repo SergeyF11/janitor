@@ -29,10 +29,14 @@ async function connect() {
   client.on('connect', () => {
     console.log(`[mqtt] Connected to ${url}`)
     const registryId = process.env.YC_REGISTRY_ID
-    client.subscribe(`$registries/${registryId}/events`, { qos: 1 })
+    const topic = `$registries/${registryId}/events/#`
+    client.subscribe(topic, { qos: 1 }, (err, granted) => {
+      console.log(`[mqtt] Subscribe to ${topic}: err=${err}, granted=${JSON.stringify(granted)}`)
+    })
   })
 
   client.on('message', async (topic, payload) => {
+    console.log(`[mqtt] RAW message: ${topic} ${payload.toString()}`)
     try {
       await handleMessage(topic, payload.toString())
     } catch (err) {
@@ -48,12 +52,15 @@ async function connect() {
 
 async function handleMessage(topic, payload) {
   const db = getDb()
-
-  const eventsMatch = topic.match(/^\$devices\/([^/]+)\/events$/)
+  const eventsMatch = topic.match(/^\$registries\/([^/]+)\/events/)
   if (!eventsMatch) return
-
-  const deviceId = eventsMatch[1]
   let data
+  try { data = JSON.parse(payload) } catch { return }
+  const ycDeviceId = data.device
+  if (!ycDeviceId) return
+  const [dev] = await db`SELECT device_id FROM devices WHERE mqtt_user = ${ycDeviceId}`
+  if (!dev) return
+  const deviceId = dev.device_id
   try { data = JSON.parse(payload) } catch { return }
 
   // ── offline: {online: false} или LWT ──

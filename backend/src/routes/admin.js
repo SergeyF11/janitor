@@ -23,14 +23,15 @@ async function adminRoutes(app) {
   }, async (req) => {
     const db = getDb()
     return db`
-      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.user_quota,
+      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.blocked_at, g.user_quota,
              COUNT(ug2.user_id) FILTER (WHERE ug2.role = 'user') AS user_count,
-             d.device_id, d.is_online, d.fw_version, d.last_seen
+             d.device_id, COALESCE(d.is_online, false) AS is_online, d.fw_version, d.last_seen
       FROM groups g
       JOIN user_groups ug ON ug.group_id = g.id AND ug.user_id = ${req.user.id} AND ug.role = 'admin'
+      WHERE g.status IN ('active', 'blocked')
       LEFT JOIN user_groups ug2 ON ug2.group_id = g.id
       LEFT JOIN devices d ON d.group_id = g.id
-      GROUP BY g.id, d.device_id, d.is_online, d.fw_version, d.last_seen
+      GROUP BY g.id, d.device_id, COALESCE(d.is_online, false) AS is_online, d.fw_version, d.last_seen
       ORDER BY g.name
     `
   })
@@ -110,6 +111,25 @@ async function adminRoutes(app) {
     if (req.user.role !== 'superadmin') {
       const [m] = await db`SELECT role FROM user_groups WHERE user_id = ${req.user.id} AND group_id = ${relay.group_id}`
       if (!m || m.role !== 'admin') return reply.code(403).send({ error: 'forbidden' })
+    }
+
+    // Проверка: группа заблокирована или истёк льготный период
+    const [grp] = await db`SELECT status, expires_at, grace_until FROM groups WHERE id = ${relay.group_id}`
+    if (grp) {
+      const now        = new Date()
+      const graceUntil = grp.grace_until ? new Date(grp.grace_until) : null
+      const expiresAt  = grp.expires_at  ? new Date(grp.expires_at)  : null
+      const blocked    = grp.status === 'blocked'
+        || (expiresAt && expiresAt < now && (!graceUntil || graceUntil < now))
+      if (blocked) {
+        await db`
+          INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload, ip)
+          VALUES ('relay_trigger_blocked', ${req.user.id}, ${req.user.login},
+                  ${relay.group_id}, ${relay.id},
+                  ${{ relay: relay.name, reason: 'group_blocked', by: 'admin' }}, ${req.ip})
+        `
+        return reply.code(403).send({ error: 'group_blocked' })
+      }
     }
 
     if (!relay.is_online) return reply.code(503).send({ error: 'device_offline' })
@@ -276,7 +296,8 @@ async function adminRoutes(app) {
   }, async (req) => {
     const db = getDb()
     const [device] = await db`
-      SELECT d.device_id, d.fw_version, d.last_seen, d.registered_at, d.is_online,
+      SELECT d.device_id, d.fw_version, d.last_seen, d.registered_at,
+             COALESCE(d.is_online, false) AS is_online,
              dt.code AS pending_code, dt.expires_at AS code_expires_at
       FROM groups g
       LEFT JOIN devices d ON d.group_id = g.id

@@ -58,7 +58,12 @@ export default function Main({ user, onLogout }) {
       const result = await triggerRelay(relay.id)
       setRelayStates(s => ({ ...s, [relay.id]: result.state }))
     } catch (err) {
-      console.error('trigger error', err)
+      if (err.status === 403 || err.body?.error === 'group_blocked') {
+        // Обновить данные группы — покажет заблокированный баннер
+        await loadData()
+      } else {
+        console.error('trigger error', err)
+      }
     } finally {
       setTimeout(() => setPressing(p => ({ ...p, [relay.id]: false })), 300)
     }
@@ -134,6 +139,8 @@ export default function Main({ user, onLogout }) {
                 </div>
               </div>
 
+              <ExpiryBanner group={group} />
+
               {relays.length === 0 && (
                 <div className="group-offline-hint">Нет реле</div>
               )}
@@ -154,7 +161,7 @@ export default function Main({ user, onLogout }) {
                         !online ? 'relay-offline' : '',
                       ].join(' ')}
                       onClick={() => handleTrigger(relay)}
-                      disabled={busy || !online}
+                      disabled={busy || !online || group.status === 'blocked'}
                     >
                       {busy ? (
                         <span className="relay-btn-spinner" />
@@ -622,6 +629,46 @@ function LogsTab({ group }) {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+
+// ── Баннер истечения срока ────────────────────────────────────
+function ExpiryBanner({ group }) {
+  const [, forceUpdate] = useState(0)
+
+  useEffect(() => {
+    const t = setInterval(() => forceUpdate(n => n + 1), 60000)
+    return () => clearInterval(t)
+  }, [])
+
+  const now         = new Date()
+  const expiresAt   = group.expires_at  ? new Date(group.expires_at)  : null
+  const graceUntil  = group.grace_until ? new Date(group.grace_until) : null
+  const isBlocked   = group.status === 'blocked'
+  const inGrace     = expiresAt && expiresAt < now && graceUntil && graceUntil > now
+
+  if (!isBlocked && !inGrace) return null
+
+  function daysUntil(date) {
+    return Math.max(0, Math.ceil((date - now) / (1000 * 60 * 60 * 24)))
+  }
+
+  if (isBlocked) {
+    return (
+      <div className="expiry-banner expiry-blocked">
+        🔒 Доступ заблокирован — срок действия истёк.
+        Обратитесь к администратору сервиса.
+      </div>
+    )
+  }
+
+  const days = daysUntil(graceUntil)
+  const urgency = days <= 7 ? 'expiry-urgent' : days <= 14 ? 'expiry-warning' : 'expiry-notice'
+  return (
+    <div className={`expiry-banner ${urgency}`}>
+      ⚠️ Срок действия группы истёк. Осталось <b>{days} дн.</b> до блокировки.
     </div>
   )
 }
