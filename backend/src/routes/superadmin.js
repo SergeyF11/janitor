@@ -144,27 +144,27 @@ async function superadminRoutes(app) {
       RETURNING *
     `
 
-    // Авто-создать администратора группы
-    const adminLogin    = `${mqtt_topic}@admins`
-    const adminPassword = generatePassword(12)
-    const bcrypt        = require('bcryptjs')
-    const adminHash     = await bcrypt.hash(adminPassword, 12)
-    const [admin] = await db`
+    // Авто-создать пользователя группы
+    const groupUserLogin    = `${mqtt_topic}@user`
+    const groupUserPassword = generatePassword(12)
+    const bcrypt            = require('bcryptjs')
+    const groupUserHash     = await bcrypt.hash(groupUserPassword, 12)
+    const [groupUser] = await db`
       INSERT INTO users (login, password_hash, role, must_change_password, single_session, created_by)
-      VALUES (${adminLogin}, ${adminHash}, 'admin', true, true, ${req.user.id})
-      ON CONFLICT (login) DO UPDATE SET password_hash = ${adminHash}
+      VALUES (${groupUserLogin}, ${groupUserHash}, 'user', true, true, ${req.user.id})
+      ON CONFLICT (login) DO UPDATE SET password_hash = ${groupUserHash}
       RETURNING id
     `
     await db`
       INSERT INTO user_groups (user_id, group_id, role, created_by)
-      VALUES (${admin.id}, ${group.id}, 'admin', ${req.user.id})
+      VALUES (${groupUser.id}, ${group.id}, 'user', ${req.user.id})
       ON CONFLICT DO NOTHING
     `
 
     return reply.code(201).send({
       ...group,
-      admin_login:    adminLogin,
-      admin_password: adminPassword,
+      group_user_login:    groupUserLogin,
+      group_user_password: groupUserPassword,
     })
   })
 

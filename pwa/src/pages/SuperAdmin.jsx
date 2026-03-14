@@ -321,8 +321,11 @@ function GroupsTab({ data, reload, onCreds }) {
       setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0, _topic_edited: false })
       setShowCreate(false)
       reload()
-      if (result && result.admin_login) {
-        onCreds({ login: result.admin_login, password: result.admin_password })
+      if (result && (result.group_user_login || result.admin_login)) {
+        onCreds({
+          login: result.group_user_login || result.admin_login,
+          password: result.group_user_password || result.admin_password,
+        })
       }
     } catch (e) {
       setErr(e.message === 'mqtt_topic_taken' ? 'MQTT топик занят.' : 'Ошибка: ' + e.message)

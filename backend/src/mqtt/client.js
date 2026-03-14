@@ -29,7 +29,19 @@ async function connect() {
   client.on('connect', () => {
     console.log(`[mqtt] Connected to ${url}`)
     const registryId = process.env.YC_REGISTRY_ID
-    client.subscribe(`$registries/${registryId}/events`, { qos: 1 })
+    if (!registryId) {
+      console.error('[mqtt] YC_REGISTRY_ID is empty, skip subscribe')
+      return
+    }
+
+    const topic = `$registries/${registryId}/events`
+    client.subscribe(topic, { qos: 1 }, (err, granted) => {
+      if (err) {
+        console.error('[mqtt] subscribe error:', err.message)
+        return
+      }
+      console.log('[mqtt] subscribed:', granted?.map((g) => `${g.topic} qos=${g.qos}`).join(', ') || topic)
+    })
   })
 
   client.on('message', async (topic, payload) => {
@@ -48,13 +60,29 @@ async function connect() {
 
 async function handleMessage(topic, payload) {
   const db = getDb()
-
-  const eventsMatch = topic.match(/^\$devices\/([^/]+)\/events$/)
-  if (!eventsMatch) return
-
-  const deviceId = eventsMatch[1]
   let data
   try { data = JSON.parse(payload) } catch { return }
+
+  // Формат Janitor/YC: $registries/{registryId}/events, device_id в payload.device
+  const registryTopicMatch = topic.match(/^\$registries\/([^/]+)\/events$/)
+  if (!registryTopicMatch) return
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    console.warn('[mqtt] skip registry event without object payload')
+    return
+  }
+
+  const deviceId = data.device
+  if (!deviceId) {
+    console.warn('[mqtt] skip registry event without payload.device')
+    return
+  }
+
+  return processDeviceEvent(db, deviceId, data)
+}
+
+async function processDeviceEvent(db, deviceId, data) {
+  if (!data) return
 
   // ── offline: {online: false} или LWT ──
   if (data.online === false) {
