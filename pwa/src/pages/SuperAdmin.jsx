@@ -227,7 +227,6 @@ function AdminsTab({ data, reload }) {
           <div key={a.id} className="sa-row">
             <div className="sa-row-main">
               <span className="sa-row-login">{renderScopedLogin(a.login, (a.groups || [])[0])}</span>
-              {a.display_name && <span className="sa-row-name">{a.display_name}</span>}
               {a.has_session  && <span className="session-dot" title="Активная сессия">●</span>}
               {!a.is_active   && <span className="badge-inactive">заблокирован</span>}
               <span className={`badge-ss ${a.single_session ? 'on' : 'off'}`}>
@@ -236,9 +235,9 @@ function AdminsTab({ data, reload }) {
             </div>
 
             {(a.groups || []).length > 0 && (
-              <div className="sa-row-groups">
+              <div className="sa-row-groups" title="Администрируемые группы">
                 {a.groups.map(g => (
-                  <span key={g.id} className="badge-group">{g.name} · {renderScopedLogin(a.login, g)}</span>
+                  <span key={g.id} className="badge-group">{g.name}</span>
                 ))}
               </div>
             )}
@@ -295,32 +294,12 @@ function GroupsTab({ data, reload, onCreds }) {
   const [allAdmins, setAllAdmins]     = useState([])
   const [saving, setSaving]           = useState(false)
   const [err, setErr]                 = useState(null)
-  // const [editTopic, setEditTopic]     = useState({})   // groupId → string
-  // const [savingTopic, setSavingTopic] = useState({})   // groupId → bool
   const [editName, setEditName]       = useState({})   // groupId → string
   const [savingName, setSavingName]   = useState({})   // groupId → bool
 
   useEffect(() => {
     saGetAdmins().then(setAllAdmins).catch(() => {})
   }, [])
-
-  // async function handleSaveTopic(g) {
-  //   const newTopic = (editTopic[g.id] ?? g.mqtt_topic).trim()
-  //   if (!newTopic || newTopic === g.mqtt_topic) {
-  //     setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })
-  //     return
-  //   }
-  //   setSavingTopic(s => ({ ...s, [g.id]: true }))
-  //   try {
-  //     await saUpdateGroup(g.id, { mqtt_topic: newTopic })
-  //     setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })
-  //     reload()
-  //   } catch (e) {
-  //     alert(e.message === 'mqtt_topic_taken' ? 'MQTT топик уже занят.' : 'Ошибка: ' + e.message)
-  //   } finally {
-  //     setSavingTopic(s => ({ ...s, [g.id]: false }))
-  //   }
-  // }
 
   async function handleSaveName(g) {
     const newName = (editName[g.id] ?? g.name).trim()
@@ -334,7 +313,6 @@ function GroupsTab({ data, reload, onCreds }) {
       setEditName(t => { const c = { ...t }; delete c[g.id]; return c })
       reload()
     } catch (e) {
-      
       alert('Ошибка: ' + e.message)
     } finally {
       setSavingName(s => ({ ...s, [g.id]: false }))
@@ -457,9 +435,9 @@ function GroupsTab({ data, reload, onCreds }) {
                     autoFocus
                   />
                   <button className="btn btn-primary btn-xs"
-                      disabled={savingName[g.id]}
-                      onClick={() => handleSaveName(g)}>
-                      {savingName[g.id] ? '...' : '✓'}
+                          disabled={savingName[g.id]}
+                          onClick={() => handleSaveName(g)}>
+                    {savingName[g.id] ? '...' : '✓'}
                   </button>
                   <button className="btn btn-outline btn-xs"
                           onClick={() => setEditName(t => { const c = { ...t }; delete c[g.id]; return c })}>
@@ -665,7 +643,7 @@ function UsersTab() {
                 )}
               </div>
             </div>
-          ))}
+          ))} ✏️ {g.name}
         </div>
       )}
     </div>

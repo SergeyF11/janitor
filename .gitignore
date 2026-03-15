@@ -7,3 +7,4 @@ redis/data/
 *.rdb
 *.log
 .env
+*.patch
