@@ -94,25 +94,25 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
 
     // if (userRow) {
     //   user = userRow
-    // if (fullLoginRow) {
-    //   user = fullLoginRow
-    // } else {
-    //   // Попытка 2: субадмин (role=admin) в группе
-    //   const [adminRow] = await db`
-    //     SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
-    //            u.must_change_password, u.is_active, u.token_version
-    //     FROM users u
-    //     JOIN user_groups ug ON ug.user_id = u.id
-    //     JOIN groups g       ON g.id = ug.group_id
-    //     WHERE u.login      = ${login}
-    //       AND g.mqtt_topic = ${groupTopic}
-    //       AND u.role       = 'admin'
-    //       AND g.status     = 'active'
-    //       AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
-    //     LIMIT 1
-    //   `
-    //   user = adminRow
-    // }
+    if (fullLoginRow) {
+      user = fullLoginRow
+    } else {
+      // Попытка 2: субадмин (role=admin) в группе
+      const [adminRow] = await db`
+        SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
+               u.must_change_password, u.is_active, u.token_version
+        FROM users u
+        JOIN user_groups ug ON ug.user_id = u.id
+        JOIN groups g       ON g.id = ug.group_id
+        WHERE u.login      = ${login}
+          AND g.mqtt_topic = ${groupTopic}
+          AND u.role       = 'admin'
+          AND g.status     = 'active'
+          AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
+        LIMIT 1
+      `
+      user = adminRow
+    }
   } else {
     // Без @ — только суперадмин
     const [row] = await db`

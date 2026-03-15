@@ -145,7 +145,7 @@ async function superadminRoutes(app) {
     `
 
     // Авто-создать администратора группы
-    const adminLogin    = `admin@${mqtt_topic}`
+    const adminLogin    = 'admin' //`admin@${mqtt_topic}`
     const adminPassword = generatePassword(12)
     const bcrypt        = require('bcryptjs')
     const adminHash     = await bcrypt.hash(adminPassword, 12)
