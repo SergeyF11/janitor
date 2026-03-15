@@ -135,8 +135,10 @@ function StatsTab({ data }) {
 // ── Администраторы ────────────────────────────────────────────
 function AdminsTab({ data, reload }) {
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm]     = useState({ login: '', password: '', single_session: true })
+  //const [form, setForm]     = useState({ login: '', password: '', single_session: true })
+  const [form, setForm]     = useState({ login: '', password: '', group_id: '', single_session: true })
   const [resetPwd, setResetPwd] = useState({})
+  const [groups, setGroups] = useState([])
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState(null)
 
@@ -145,11 +147,15 @@ function AdminsTab({ data, reload }) {
     setSaving(true); setErr(null)
     try {
       await saCreateAdmin(form)
-      setForm({ login: '', password: '', single_session: true })
+      //setForm({ login: '', password: '', single_session: true })
+      setForm({ login: '', password: '', group_id: '', single_session: true })
       setShowCreate(false)
       reload()
     } catch (e) {
-      setErr(e.message === 'login_taken' ? 'Логин занят.' : 'Ошибка: ' + e.message)
+      //setErr(e.message === 'login_taken' ? 'Логин занят.' : 'Ошибка: ' + e.message)
+       setErr(e.message === 'login_taken' ? 'Логин в этой группе уже занят.' :
+             e.message === 'group_not_found' ? 'Группа не найдена.' :
+             e.message === 'login_too_short' ? 'Логин должен быть не короче 3 символов.' : 'Ошибка: ' + e.message)
     } finally { setSaving(false) }
   }
 
@@ -176,6 +182,18 @@ function AdminsTab({ data, reload }) {
     try { await saUpdateAdmin(id, { [field]: val }); reload() } catch (e) { alert(e.message) }
   }
 
+  /// add by chat
+  useEffect(() => {
+    saGetGroups().then(setGroups).catch(() => {})
+  }, [])
+
+  const selectedGroup = groups.find(g => g.id === form.group_id)
+  const scopedPreview = form.login
+    ? `${String(form.login).split('@')[0]}${selectedGroup?.mqtt_topic ? `@${selectedGroup.mqtt_topic}` : ''}`
+    : ''
+
+  ///
+
   return (
     <div className="sa-tab">
       <div className="sa-toolbar">
@@ -199,6 +217,21 @@ function AdminsTab({ data, reload }) {
                      onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
                      required minLength={6} />
             </div>
+
+
+            <div className="field">
+              <label>Группа</label>
+              <select value={form.group_id}
+                      onChange={e => setForm(f => ({ ...f, group_id: e.target.value }))}
+                      required>
+                <option value="">— выберите группу —</option>
+                {groups.map(gr => (
+                  <option key={gr.id} value={gr.id}>{gr.name} ({gr.mqtt_topic})</option>
+                ))}
+              </select>
+              {scopedPreview && <div className="sa-row-meta" style={{ marginTop: 6 }}>Логин: <code>{scopedPreview}</code></div>}
+            </div>
+
             <div className="field field-checkbox">
               <label>
                 <input type="checkbox" checked={form.single_session}
@@ -220,7 +253,7 @@ function AdminsTab({ data, reload }) {
           <div key={a.id} className="sa-row">
             <div className="sa-row-main">
               <span className="sa-row-login">{a.login}</span>
-              {a.display_name && <span className="sa-row-name">{a.display_name}</span>}
+              {/* {a.display_name && <span className="sa-row-name">{a.display_name}</span>} */}
               {a.has_session  && <span className="session-dot" title="Активная сессия">●</span>}
               {!a.is_active   && <span className="badge-inactive">заблокирован</span>}
               <span className={`badge-ss ${a.single_session ? 'on' : 'off'}`}>
@@ -229,7 +262,7 @@ function AdminsTab({ data, reload }) {
             </div>
 
             {(a.groups || []).length > 0 && (
-              <div className="sa-row-groups">
+              <div className="sa-row-groups"  title="Администрируемые группы">
                 {a.groups.map(g => (
                   <span key={g.id} className="badge-group">{g.name}</span>
                 ))}
@@ -288,28 +321,31 @@ function GroupsTab({ data, reload, onCreds }) {
   const [allAdmins, setAllAdmins]     = useState([])
   const [saving, setSaving]           = useState(false)
   const [err, setErr]                 = useState(null)
-  const [editTopic, setEditTopic]     = useState({})   // groupId → string
-  const [savingTopic, setSavingTopic] = useState({})   // groupId → bool
+  // const [editTopic, setEditTopic]     = useState({})   // groupId → string
+  // const [savingTopic, setSavingTopic] = useState({})   // groupId → bool
+  const [editName, setEditName]       = useState({})   // groupId → string
+  const [savingName, setSavingName]   = useState({})   // groupId → bool
 
   useEffect(() => {
     saGetAdmins().then(setAllAdmins).catch(() => {})
-  }, [])
+  }, [data])
 
-  async function handleSaveTopic(g) {
-    const newTopic = (editTopic[g.id] ?? g.mqtt_topic).trim()
-    if (!newTopic || newTopic === g.mqtt_topic) {
-      setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })
+  async function handleSaveName(g) {
+    const newName = (editName[g.id] ?? g.name).trim()
+    if (!newName || newName === g.name) {
+      setEditName(t => { const c = { ...t }; delete c[g.id]; return c })
       return
     }
-    setSavingTopic(s => ({ ...s, [g.id]: true }))
+    setSavingName(s => ({ ...s, [g.id]: true }))
     try {
-      await saUpdateGroup(g.id, { mqtt_topic: newTopic })
-      setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })
+      await saUpdateGroup(g.id, { name: newName })
+      setEditName(t => { const c = { ...t }; delete c[g.id]; return c })
       reload()
     } catch (e) {
-      alert(e.message === 'mqtt_topic_taken' ? 'MQTT топик уже занят.' : 'Ошибка: ' + e.message)
+      //alert(e.message === 'mqtt_topic_taken' ? 'MQTT топик уже занят.' : 'Ошибка: ' + e.message)
+      alert('Ошибка: ' + e.message)
     } finally {
-      setSavingTopic(s => ({ ...s, [g.id]: false }))
+      setSavingName(s => ({ ...s, [g.id]: false }))
     }
   }
 
@@ -387,11 +423,11 @@ function GroupsTab({ data, reload, onCreds }) {
                      onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value, _topic_edited: true }))}
                      placeholder="авто из названия" />
             </div>
-            <div className="field">
+{/*             <div className="field">
               <label>Длит. реле мс (0=триггер)</label>
               <input type="number" min="0" value={form.relay_duration_ms}
                      onChange={e => setForm(f => ({ ...f, relay_duration_ms: +e.target.value }))} />
-            </div>
+            </div> */}
             <div className="field">
               <label>Квота (0=∞)</label>
               <input type="number" min="0" value={form.user_quota}
@@ -410,41 +446,42 @@ function GroupsTab({ data, reload, onCreds }) {
         {data.map(g => (
           <div key={g.id} className="sa-row">
             <div className="sa-row-main">
-              <span className="sa-row-login">{g.name}</span>
-              {editTopic[g.id] !== undefined ? (
+              {/* <span className="sa-row-login">{g.name}</span>
+              {editTopic[g.id] !== undefined ? ( */}
+              {editName[g.id] !== undefined ? (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <input
                     className="input-inline"
                     style={{ width: 140, fontSize: 12 }}
-                    value={editTopic[g.id]}
-                    onChange={e => setEditTopic(t => ({ ...t, [g.id]: e.target.value }))}
+                    value={editName[g.id]}
+                    onChange={e => setEditName(t => ({ ...t, [g.id]: e.target.value }))}
                     onKeyDown={e => {
-                      if (e.key === 'Enter') handleSaveTopic(g)
-                      if (e.key === 'Escape') setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })
+                      if (e.key === 'Enter') handleSaveName(g)
+                      if (e.key === 'Escape') setEditName(t => { const c = { ...t }; delete c[g.id]; return c })
                     }}
                     autoFocus
                   />
                   <button className="btn btn-primary btn-xs"
-                          disabled={savingTopic[g.id]}
-                          onClick={() => handleSaveTopic(g)}>
-                    {savingTopic[g.id] ? '...' : '✓'}
+                          disabled={savingName[g.id]}
+                          onClick={() => handleSaveName(g)}>
+                    {savingName[g.id] ? '...' : '✓'}
                   </button>
                   <button className="btn btn-outline btn-xs"
-                          onClick={() => setEditTopic(t => { const c = { ...t }; delete c[g.id]; return c })}>
+                          onClick={() => setEditName(t => { const c = { ...t }; delete c[g.id]; return c })}>
                     ✕
                   </button>
                 </span>
               ) : (
                 <span
                   className="badge-topic"
-                  title="Нажмите для редактирования топика"
+                  title="Нажмите для редактирования имени"
                   style={{ cursor: 'pointer' }}
-                  onClick={() => setEditTopic(t => ({ ...t, [g.id]: g.mqtt_topic }))}
+                  onClick={() => setEditName(t => ({ ...t, [g.id]: g.name }))}
                 >
-                  ✏️ {g.mqtt_topic}
+                  ✏️ {g.name}
                 </span>
               )}
-              <span className={`badge-status ${g.status}`}>{g.status}</span>
+              {/* <span className={`badge-status ${g.status}`}>{g.status}</span> */}
               <span className="sa-row-meta">
                 {g.user_count} польз. · {g.admin_count} адм.
                 {g.user_quota > 0 && ` · квота: ${g.user_quota}`}
