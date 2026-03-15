@@ -65,6 +65,7 @@ export default function SuperAdmin({ user, onLogout }) {
     if (tab === 'logs')    return <LogsTab    data={arr} reload={load} />
     return null
   }
+  console.dir(pendingCreds, { depth: null })
 
   return (
     <div className="sa-screen">
@@ -72,7 +73,7 @@ export default function SuperAdmin({ user, onLogout }) {
         <div className="sa-creds-modal">
           <div className="sa-creds-box">
             <div className="sa-creds-title">✅ Группа создана. Данные администратора:</div>
-            <div className="sa-creds-row"><b>Логин:</b> <code>{pendingCreds.login}</code></div>
+            <div className="sa-creds-row"><b>Логин:</b> <code>{pendingCreds.login}@{pendingCreds.login}</code></div>
             <div className="sa-creds-row"><b>Пароль:</b> <code>{pendingCreds.password}</code></div>
             <div className="sa-creds-hint">Сохраните пароль — он больше не будет показан.</div>
             <button className="btn btn-primary" onClick={() => setPendingCreds(null)}>Понятно</button>
@@ -209,13 +210,15 @@ function AdminsTab({ data, reload }) {
               <label>Логин</label>
               <input value={form.login}
                      onChange={e => setForm(f => ({ ...f, login: e.target.value }))}
-                     required minLength={3} />
+                     required minLength={3}
+                     autocomplete="one-time-code" />
             </div>
             <div className="field">
               <label>Пароль</label>
               <input type="password" value={form.password}
                      onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                     required minLength={6} />
+                     required minLength={6}
+                     autocomplete="new-password" />
             </div>
 
 

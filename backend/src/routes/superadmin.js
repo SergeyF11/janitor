@@ -27,10 +27,11 @@ async function superadminRoutes(app) {
     onRequest: [authenticate, isSuperAdmin],
     schema: {
       body: {
-        type: 'object', required: ['login', 'password'],
+        type: 'object', required: ['login', 'password', 'group_id'],
         properties: {
           login:          { type: 'string', minLength: 3, maxLength: 100 },
           password:       { type: 'string', minLength: 6 },
+          group_id:       { type: 'string', format: 'uuid' },
           single_session: { type: 'boolean', default: true },
           display_name:   { type: 'string', maxLength: 200 },
           phone:          { type: 'string', maxLength: 50 },
@@ -39,13 +40,32 @@ async function superadminRoutes(app) {
     }
   }, async (req, reply) => {
     const db = getDb()
-    const { login, password, single_session = true, display_name, phone } = req.body
-    const [taken] = await db`SELECT id FROM users WHERE login = ${login}`
+    // const { login, password, single_session = true, display_name, phone } = req.body
+    // const [taken] = await db`SELECT id FROM users WHERE login = ${login}`
+        const { login, password, group_id, single_session = true, display_name, phone } = req.body
+    const [group] = await db`SELECT id FROM groups WHERE id = ${group_id}`
+    if (!group) return reply.code(404).send({ error: 'group_not_found' })
+
+    const normalizedLogin = String(login).split('@')[0].trim()
+    if (normalizedLogin.length < 3) return reply.code(400).send({ error: 'login_too_short' })
+
+    const [taken] = await db`SELECT id FROM users WHERE login = ${normalizedLogin}`
+
     if (taken) return reply.code(409).send({ error: 'login_taken' })
-    const user = await createUser(login, password, 'admin', req.user.id, {
+    //const user = await createUser(login, password, 'admin', req.user.id, {
+  const user = await createUser(normalizedLogin, password, 'admin', req.user.id, {
+
       must_change_password: true, single_session,
       display_name: display_name || null, phone: phone || null,
     })
+
+
+    await db`
+      INSERT INTO user_groups (user_id, group_id, role, created_by)
+      VALUES (${user.id}, ${group_id}, 'admin', ${req.user.id})
+      ON CONFLICT (user_id, group_id) DO UPDATE SET role = 'admin'
+    `
+
     return reply.code(201).send(user)
   })
 
@@ -145,14 +165,18 @@ async function superadminRoutes(app) {
     `
 
     // Авто-создать администратора группы
-    const adminLogin    = 'admin' //`${mqtt_topic}@admins`
+    const adminLogin    = `${mqtt_topic}`
     const adminPassword = generatePassword(12)
     const bcrypt        = require('bcryptjs')
     const adminHash     = await bcrypt.hash(adminPassword, 12)
+
+    const [takenAdminLogin] = await db`SELECT id FROM users WHERE login = ${adminLogin}`
+    if (takenAdminLogin) return reply.code(409).send({ error: 'admin_login_taken' })
+
+
     const [admin] = await db`
       INSERT INTO users (login, password_hash, role, must_change_password, single_session, created_by)
       VALUES (${adminLogin}, ${adminHash}, 'admin', true, true, ${req.user.id})
-      ON CONFLICT (login) DO UPDATE SET password_hash = ${adminHash}
       RETURNING id
     `
     await db`
