@@ -94,8 +94,8 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
 
     // if (userRow) {
     //   user = userRow
-    if (fullLoginRow) {
-      user = fullLoginRow
+    // if (fullLoginRow) {
+    //   user = fullLoginRow
     // } else {
     //   // Попытка 2: субадмин (role=admin) в группе
     //   const [adminRow] = await db`
