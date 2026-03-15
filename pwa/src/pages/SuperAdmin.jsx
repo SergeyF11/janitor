@@ -135,8 +135,9 @@ function StatsTab({ data }) {
 // ── Администраторы ────────────────────────────────────────────
 function AdminsTab({ data, reload }) {
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm]     = useState({ login: '', password: '', single_session: true })
+  const [form, setForm]     = useState({ login: '', password: '', group_id: '', single_session: true }) //const [form, setForm]     = useState({ login: '', password: '', single_session: true })
   const [resetPwd, setResetPwd] = useState({})
+  const [groups, setGroups] = useState([])
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState(null)
 
@@ -145,11 +146,14 @@ function AdminsTab({ data, reload }) {
     setSaving(true); setErr(null)
     try {
       await saCreateAdmin(form)
-      setForm({ login: '', password: '', single_session: true })
+      setForm({ login: '', password: '', group_id: '', single_session: true }) //setForm({ login: '', password: '', single_session: true })
       setShowCreate(false)
       reload()
     } catch (e) {
-      setErr(e.message === 'login_taken' ? 'Логин занят.' : 'Ошибка: ' + e.message)
+      //setErr(e.message === 'login_taken' ? 'Логин занят.' : 'Ошибка: ' + e.message)
+      setErr(e.message === 'login_taken' ? 'Логин в этой группе уже занят.' :
+             e.message === 'group_not_found' ? 'Группа не найдена.' :
+             e.message === 'login_too_short' ? 'Логин должен быть не короче 3 символов.' : 'Ошибка: ' + e.message)
     } finally { setSaving(false) }
   }
 
@@ -175,6 +179,16 @@ function AdminsTab({ data, reload }) {
   async function handleToggle(id, field, val) {
     try { await saUpdateAdmin(id, { [field]: val }); reload() } catch (e) { alert(e.message) }
   }
+
+  useEffect(() => {
+    saGetGroups().then(setGroups).catch(() => {})
+  }, [])
+
+  const selectedGroup = groups.find(g => g.id === form.group_id)
+  const scopedPreview = form.login
+    ? `${String(form.login).split('@')[0]}${selectedGroup?.mqtt_topic ? `@${selectedGroup.mqtt_topic}` : ''}`
+    : ''
+
 
   function renderScopedLogin(login, group) {
     if (!login) return login
@@ -206,6 +220,19 @@ function AdminsTab({ data, reload }) {
                      onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
                      required minLength={6} />
             </div>
+             <div className="field">
+              <label>Группа</label>
+              <select value={form.group_id}
+                      onChange={e => setForm(f => ({ ...f, group_id: e.target.value }))}
+                      required>
+                <option value="">— выберите группу —</option>
+                {groups.map(gr => (
+                  <option key={gr.id} value={gr.id}>{gr.name} ({gr.mqtt_topic})</option>
+                ))}
+              </select>
+              {scopedPreview && <div className="sa-row-meta" style={{ marginTop: 6 }}>Логин: <code>{scopedPreview}</code></div>}
+            </div>
+            
             <div className="field field-checkbox">
               <label>
                 <input type="checkbox" checked={form.single_session}
@@ -299,7 +326,7 @@ function GroupsTab({ data, reload, onCreds }) {
 
   useEffect(() => {
     saGetAdmins().then(setAllAdmins).catch(() => {})
-  }, [])
+  }, [data])
 
   async function handleSaveName(g) {
     const newName = (editName[g.id] ?? g.name).trim()
@@ -451,7 +478,7 @@ function GroupsTab({ data, reload, onCreds }) {
                   style={{ cursor: 'pointer' }}
                   onClick={() => setEditName(t => ({ ...t, [g.id]: g.name }))}
                 >
-                  ✏️ {g.name}
+                  {g.name}
                 </span>
               )}
               <span className="badge-topic">{g.mqtt_topic}</span>

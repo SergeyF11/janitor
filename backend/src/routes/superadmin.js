@@ -152,7 +152,11 @@ async function superadminRoutes(app) {
     const [admin] = await db`
       INSERT INTO users (login, password_hash, role, must_change_password, single_session, created_by)
       VALUES (${adminLogin}, ${adminHash}, 'admin', true, true, ${req.user.id})
-      ON CONFLICT (login) DO UPDATE SET password_hash = ${adminHash}
+      ON CONFLICT (login) DO UPDATE SET
+        password_hash = ${adminHash},
+        role = 'admin',
+        must_change_password = true,
+        single_session = true
       RETURNING id
     `
     await db`
@@ -163,7 +167,7 @@ async function superadminRoutes(app) {
 
     return reply.code(201).send({
       ...group,
-      admin_login:    `${adminLogin}@${mqtt_topic}`,
+      admin_login:    adminLogin,
       admin_password: adminPassword,
     })
   })
