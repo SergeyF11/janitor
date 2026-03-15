@@ -85,8 +85,7 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
       WHERE u.login      = ${loginStr}
         AND g.mqtt_topic = ${groupTopic}
         AND u.role IN ('user', 'admin')
-        AND g.status     = 'active'
-        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
+        AND g.status IN ('active', 'grace', 'blocked')
       LIMIT 1
     `
 
@@ -103,8 +102,7 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
         WHERE u.login      = ${login}
           AND g.mqtt_topic = ${groupTopic}
           AND u.role IN ('user', 'admin')
-          AND g.status     = 'active'
-          AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
+          AND g.status IN ('active', 'grace', 'blocked')
         LIMIT 1
       `
       user = userRow

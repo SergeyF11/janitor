@@ -3,6 +3,7 @@ require('dotenv').config()
 const fastify = require('fastify')({ logger: true })
 const { migrate } = require('./db/migrate')
 const { initDb } = require('./db/connection')
+const { startGroupLifecycleScheduler } = require('./services/group_lifecycle.service')
 
 async function buildApp() {
   await fastify.register(require('@fastify/cors'), { origin: process.env.CORS_ORIGIN || true, credentials: true })
@@ -23,6 +24,11 @@ async function buildApp() {
 
   await initDb()
   if (process.env.RUN_MIGRATIONS === 'true') await migrate()
+
+  const stopLifecycleScheduler = startGroupLifecycleScheduler()
+  fastify.addHook('onClose', async () => {
+    stopLifecycleScheduler()
+  })
 
   const mqttClient = await require('./mqtt/client').connect()
   fastify.decorate('mqtt', mqttClient)

@@ -140,7 +140,7 @@ async function superadminRoutes(app) {
 
     const [group] = await db`
       INSERT INTO groups (name, mqtt_topic, user_quota, expires_at, created_by)
-      VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expires_at || null}, ${req.user.id})
+      VALUES (${name}, ${mqtt_topic}, ${user_quota}, COALESCE(${expires_at || null}, NOW() + INTERVAL '1 month'), ${req.user.id})
       RETURNING *
     `
 

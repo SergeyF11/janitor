@@ -6,6 +6,7 @@ import {
   updateSingleSession, adminResetUserPassword, adminTriggerRelay,
   getGroupLogs, updateUserDescription, patchAdminRelay
 } from '../api'
+import ExpiryWarning, { isGroupBlocked } from '../~components/ExpiryWarning'
 
 export default function Main({ user, onLogout }) {
   const [groups, setGroups]           = useState([])
@@ -103,6 +104,8 @@ export default function Main({ user, onLogout }) {
         </div>
       )}
 
+      <ExpiryWarning groups={groups} />
+
       <div className="groups-list">
         {groups.length === 0 && (
           <div className="empty-state">
@@ -115,6 +118,7 @@ export default function Main({ user, onLogout }) {
           const online  = devOnline[group.device_id] ?? group.device_online ?? false
           const relays  = group.relays || []
           const isAdmin = group.role === 'admin'
+          const groupBlocked = isGroupBlocked(group)
 
           return (
             <div key={group.id} className="group-card">
@@ -154,7 +158,7 @@ export default function Main({ user, onLogout }) {
                         !online ? 'relay-offline' : '',
                       ].join(' ')}
                       onClick={() => handleTrigger(relay)}
-                      disabled={busy || !online}
+                      disabled={busy || !online || groupBlocked}
                     >
                       {busy ? (
                         <span className="relay-btn-spinner" />
@@ -170,7 +174,8 @@ export default function Main({ user, onLogout }) {
                 })}
               </div>
 
-              {!online && <div className="group-offline-hint">Устройство недоступно</div>}
+              {groupBlocked && <div className="group-offline-hint">Группа заблокирована: срок действия истёк.</div>}
+              {!groupBlocked && !online && <div className="group-offline-hint">Устройство недоступно</div>}
             </div>
           )
         })}
@@ -182,6 +187,7 @@ export default function Main({ user, onLogout }) {
 // ── Панель настроек группы (только для admin) ─────────────────
 function AdminSettings({ group, groups, user, onBack, onLogout }) {
   const [tab, setTab] = useState('users')
+  const locked = isGroupBlocked(group)
 
   return (
     <div className="admin-screen">
@@ -206,9 +212,10 @@ function AdminSettings({ group, groups, user, onBack, onLogout }) {
             ))}
           </div>
 
-          {tab === 'users'  && <UsersTab  group={group} groups={groups} user={user} />}
-          {tab === 'device' && <DeviceTab group={group} />}
-          {tab === 'relays' && <RelaysTab group={group} />}
+          <ExpiryWarning groups={[group]} compact />
+          {tab === 'users'  && <UsersTab  group={group} groups={groups} user={user} locked={locked} />}
+          {tab === 'device' && <DeviceTab group={group} locked={locked} />}
+          {tab === 'relays' && <RelaysTab group={group} locked={locked} />}
           {tab === 'logs'   && <LogsTab   group={group} />}
         </main>
       </div>
@@ -217,7 +224,7 @@ function AdminSettings({ group, groups, user, onBack, onLogout }) {
 }
 
 // ── Вкладка: Пользователи ─────────────────────────────────────
-function UsersTab({ group, groups, user: currentUser }) {
+function UsersTab({ group, groups, user: currentUser, locked = false }) {
   const [users, setUsers]             = useState([])
   const [showAdd, setShowAdd]         = useState(false)
   const [addMode, setAddMode]         = useState('new')
@@ -265,13 +272,14 @@ function UsersTab({ group, groups, user: currentUser }) {
   return (
     <div className="tab-content">
       <div className="tab-toolbar">
-        <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(v => !v)}>
+        <button className="btn btn-primary btn-sm" disabled={locked} onClick={() => setShowAdd(v => !v)}>
           {showAdd ? 'Отмена' : '+ Добавить'}
         </button>
         <ImportFromGroup
           currentGroupId={group.id}
           groups={groups.filter(g => g.id !== group.id)}
           onImported={load}
+          locked={locked}
         />
       </div>
 
@@ -335,7 +343,7 @@ function UsersTab({ group, groups, user: currentUser }) {
               />
             </div>
             {addError && <div className="form-error">{addError}</div>}
-            <button type="submit" className="btn btn-primary" disabled={saving}>
+            <button type="submit" className="btn btn-primary" disabled={saving || locked}>
               {saving ? 'Сохранение...' : 'Добавить'}
             </button>
           </form>
@@ -365,7 +373,7 @@ function UsersTab({ group, groups, user: currentUser }) {
                     <input type="text" value={editDescValue}
                            onChange={e => setEditDescValue(e.target.value)}
                            className="input-inline" style={{ flex: 1, minWidth: 150 }} autoFocus />
-                    <button className="btn btn-primary btn-xs" onClick={async () => {
+                    <button className="btn btn-primary btn-xs" disabled={locked} onClick={async () => {
                       try { await updateUserDescription(group.id, u.id, editDescValue); setEditingDesc(null); load() }
                       catch { alert('Ошибка при сохранении') }
                     }}>✓</button>
@@ -374,7 +382,7 @@ function UsersTab({ group, groups, user: currentUser }) {
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>{u.description || <span style={{ color: 'var(--text2)' }}>—</span>}</span>
-                    <button className="btn-icon" style={{ fontSize: 14 }}
+                    <button className="btn-icon" disabled={locked} style={{ fontSize: 14 }}
                             onClick={() => { setEditingDesc(u.id); setEditDescValue(u.description || '') }}
                             title="Редактировать описание">✎</button>
                   </div>
@@ -401,12 +409,12 @@ function UsersTab({ group, groups, user: currentUser }) {
 
             <div className="user-card-actions">
               {u.has_session && (
-                <button className="btn btn-outline btn-xs"
+                <button className="btn btn-outline btn-xs" disabled={locked}
                         onClick={async () => { await resetUserSessions(u.id); load() }}
                         title="Сбросить сессию">⏏ Сессия</button>
               )}
               {u.id !== currentUser.id && (
-                <button className="btn btn-outline btn-xs"
+                <button className="btn btn-outline btn-xs" disabled={locked}
                         onClick={async () => { if (confirm('Удалить из группы?')) { await removeUserFromGroup(group.id, u.id); load() } }}>
                   🗑 Удалить
                 </button>
@@ -418,12 +426,12 @@ function UsersTab({ group, groups, user: currentUser }) {
                        style={{ width: 130, fontSize: 12, padding: '3px 6px',
                                 background: 'var(--bg)', border: '1px solid var(--border)',
                                 color: 'var(--text)', borderRadius: 4 }} />
-                <button className="btn btn-outline btn-xs"
+                <button className="btn btn-outline btn-xs" disabled={locked}
                         onClick={() => handleResetPwd(u.id)}>🔑</button>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                 <label style={{ fontSize: 12, color: 'var(--text2)' }}>Одна сессия</label>
-                <input type="checkbox" checked={u.single_session}
+                <input type="checkbox" checked={u.single_session} disabled={locked}
                        onChange={async e => { await updateSingleSession(u.id, e.target.checked); load() }} />
               </div>
             </div>
@@ -435,7 +443,7 @@ function UsersTab({ group, groups, user: currentUser }) {
 }
 
 // ── Вкладка: Устройство ───────────────────────────────────────
-function DeviceTab({ group }) {
+function DeviceTab({ group, locked = false }) {
   const [device, setDevice] = useState(null)
 
   const load = useCallback(async () => {
@@ -472,7 +480,9 @@ function DeviceTab({ group }) {
             </div>
           </div>
         ) : (
-          <button className="btn btn-primary" onClick={async () => {
+          <button className="btn btn-primary" disabled={locked}
+          onClick={async () => {
+            if (locked) return
             const result = await generateDeviceToken(group.id)
             setDevice(d => ({ ...d, pending_code: result.code, code_expires_at: result.expires_at }))
           }}>Сгенерировать код привязки</button>
@@ -483,7 +493,7 @@ function DeviceTab({ group }) {
 }
 
 // ── Вкладка: Реле ─────────────────────────────────────────────
-function RelaysTab({ group }) {
+function RelaysTab({ group, locked = false }) {
   const [device, setDevice]   = useState(null)
   const [pressing, setPressing] = useState({})
   const [lastState, setLastState] = useState({})
@@ -551,7 +561,7 @@ function RelaysTab({ group }) {
                            onChange={e => setEditVal(v => ({ ...v, duration_ms: parseInt(e.target.value) || 0 }))}
                            className="input-inline" />
                   </div>
-                  <button className="btn btn-primary btn-xs" onClick={async () => {
+                  <button className="btn btn-primary btn-xs" disabled={locked} onClick={async () => {
                     try {
                         await patchAdminRelay(relay.id, editVal)
                       setEditing(null); load()
@@ -565,7 +575,7 @@ function RelaysTab({ group }) {
                   <span style={{ fontSize: 12, color: 'var(--text2)' }}>
                     {relay.duration_ms > 0 ? `импульс ${relay.duration_ms}мс` : 'переключатель'}
                   </span>
-                  <button className="btn-icon" style={{ fontSize: 14 }} onClick={() => {
+                  <button className="btn-icon" disabled={locked} style={{ fontSize: 14 }} onClick={() => {
                     setEditing(relay.id); setEditVal({ name: relay.name, duration_ms: relay.duration_ms })
                   }}>✎</button>
                 </div>
@@ -574,7 +584,7 @@ function RelaysTab({ group }) {
                 className={['relay-btn', isPulse ? 'relay-pulse' : (state === 'on' ? 'relay-on' : 'relay-off'),
                             busy ? 'relay-busy' : '', !isOnline ? 'relay-offline' : ''].join(' ')}
                 onClick={() => handleTrigger(relay)}
-                disabled={busy || !device?.device_id}
+                disabled={locked || busy || !device?.device_id}
               >
                 {busy ? <span className="relay-btn-spinner" />
                   : isPulse ? `▶ ${relay.name}`
@@ -627,7 +637,7 @@ function LogsTab({ group }) {
 }
 
 // ── Импорт пользователей из группы ───────────────────────────
-function ImportFromGroup({ currentGroupId, groups, onImported }) {
+function ImportFromGroup({ currentGroupId, groups, onImported, locked = false }) {
   const [sourceId, setSourceId] = useState('')
   const [loading, setLoading]   = useState(false)
 
@@ -652,7 +662,7 @@ function ImportFromGroup({ currentGroupId, groups, onImported }) {
         <option value="">Добавить всех из...</option>
         {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
       </select>
-      <button className="btn btn-outline btn-sm" onClick={handleImport} disabled={!sourceId || loading}>
+      <button className="btn btn-outline btn-sm" onClick={handleImport} disabled={locked || !sourceId || loading}>
         {loading ? '...' : '↓ Импорт'}
       </button>
     </div>

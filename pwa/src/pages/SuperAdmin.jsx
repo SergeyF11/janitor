@@ -290,13 +290,14 @@ function toMqttTopic(str) {
 // ── Группы ────────────────────────────────────────────────────
 function GroupsTab({ data, reload, onCreds }) {
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm]     = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
+  const [form, setForm]     = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0, expires_at: '' })
   const [assignId, setAssignId]       = useState({})   // groupId → selected adminId
   const [allAdmins, setAllAdmins]     = useState([])
   const [saving, setSaving]           = useState(false)
   const [err, setErr]                 = useState(null)
   const [editTopic, setEditTopic]     = useState({})   // groupId → string
   const [savingTopic, setSavingTopic] = useState({})   // groupId → bool
+  const [extendUntil, setExtendUntil] = useState({})   // groupId → datetime-local
 
   useEffect(() => {
     saGetAdmins().then(setAllAdmins).catch(() => {})
@@ -324,8 +325,9 @@ function GroupsTab({ data, reload, onCreds }) {
     e.preventDefault()
     setSaving(true); setErr(null)
     try {
-      const result = await saCreateGroup(form)
-      setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0, _topic_edited: false })
+      const payload = { ...form, expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : undefined }
+      const result = await saCreateGroup(payload)
+      setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0, expires_at: '', _topic_edited: false })
       setShowCreate(false)
       reload()
       if (result && (result.group_user_login || result.admin_login)) {
@@ -367,6 +369,18 @@ function GroupsTab({ data, reload, onCreds }) {
     try { await saRemoveGroupAdmin(groupId, adminId); reload() } catch (e) { alert(e.message) }
   }
 
+  async function handleExtendGroup(g) {
+    const raw = (extendUntil[g.id] || '').trim()
+    if (!raw) return
+    try {
+      await saUpdateGroup(g.id, { expires_at: new Date(raw).toISOString(), status: 'active', grace_until: null })
+      setExtendUntil(v => ({ ...v, [g.id]: '' }))
+      reload()
+    } catch (e) {
+      alert('Ошибка продления: ' + e.message)
+    }
+  }
+
   return (
     <div className="sa-tab">
       <div className="sa-toolbar">
@@ -406,6 +420,11 @@ function GroupsTab({ data, reload, onCreds }) {
               <label>Квота (0=∞)</label>
               <input type="number" min="0" value={form.user_quota}
                      onChange={e => setForm(f => ({ ...f, user_quota: +e.target.value }))} />
+            </div>
+            <div className="field">
+              <label>Срок действия до</label>
+              <input type="datetime-local" value={form.expires_at || ''}
+                     onChange={e => setForm(f => ({ ...f, expires_at: e.target.value }))} />
             </div>
           </div>
           {err && <div className="form-error">{err}</div>}
@@ -458,6 +477,8 @@ function GroupsTab({ data, reload, onCreds }) {
               <span className="sa-row-meta">
                 {g.user_count} польз. · {g.admin_count} адм.
                 {g.user_quota > 0 && ` · квота: ${g.user_quota}`}
+                {g.expires_at && ` · до ${new Date(g.expires_at).toLocaleDateString('ru')}`}
+                {g.grace_until && ` · grace до ${new Date(g.grace_until).toLocaleDateString('ru')}`}
               </span>
             </div>
 
@@ -490,6 +511,17 @@ function GroupsTab({ data, reload, onCreds }) {
               <button className="btn btn-outline btn-xs"
                       onClick={() => handleAssignAdmin(g.id)}>
                 + Назначить
+              </button>
+              <input
+                type="datetime-local"
+                className="input-inline"
+                style={{ width: 180, fontSize: 12 }}
+                value={extendUntil[g.id] || ''}
+                onChange={e => setExtendUntil(v => ({ ...v, [g.id]: e.target.value }))}
+              />
+              <button className="btn btn-outline btn-xs"
+                      onClick={() => handleExtendGroup(g)}>
+                Продлить
               </button>
               <button className="btn btn-outline btn-xs"
                       onClick={() => handleToggleStatus(g)}>

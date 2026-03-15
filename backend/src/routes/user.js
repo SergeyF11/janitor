@@ -12,7 +12,7 @@ async function userRoutes(app) {
 
     const groups = await db`
       SELECT
-        g.id, g.name, g.mqtt_topic, g.status, g.expires_at,
+        g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until,
         ug.role, ug.description,
         d.device_id,
         COALESCE(d.is_online, false) AS device_online
@@ -20,8 +20,7 @@ async function userRoutes(app) {
       JOIN user_groups ug ON ug.group_id = g.id
       LEFT JOIN devices d ON d.group_id = g.id
       WHERE ug.user_id = ${req.user.id}
-        AND g.status = 'active'
-        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
+        AND g.status IN ('active', 'grace', 'blocked')
       ORDER BY g.name
     `
 
@@ -58,8 +57,7 @@ async function userRoutes(app) {
       JOIN user_groups ug ON ug.group_id = g.id
       WHERE r.id = ${relayId}
         AND ug.user_id = ${req.user.id}
-        AND g.status = 'active'
-        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
+        AND g.status IN ('active', 'grace')
       LIMIT 1
     `
 

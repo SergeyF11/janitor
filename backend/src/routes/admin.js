@@ -77,11 +77,13 @@ async function adminRoutes(app) {
   }, async (req, reply) => {
     const db = getDb()
     const [relay] = await db`
-      SELECT r.id, d.group_id FROM relays r
+      SELECT r.id, d.group_id, g.status FROM relays r
       JOIN devices d ON d.device_id = r.device_id
+      JOIN groups g ON g.id = d.group_id
       WHERE r.id = ${req.params.relayId}
     `
     if (!relay) return reply.code(404).send({ error: 'not_found' })
+    if (relay.group_status === 'blocked') return reply.code(403).send({ error: 'group_blocked' })
 
     if (req.user.role !== 'superadmin') {
       const [m] = await db`SELECT role FROM user_groups WHERE user_id = ${req.user.id} AND group_id = ${relay.group_id}`
@@ -100,12 +102,15 @@ async function adminRoutes(app) {
     const db = getDb()
     const [relay] = await db`
       SELECT r.id, r.name, r.duration_ms, r.device_id, r.last_state,
-             d.mqtt_user, d.group_id, d.is_online
+             d.mqtt_user, d.group_id, d.is_online, g.status as group_status
       FROM relays r
       JOIN devices d ON d.device_id = r.device_id
+      JOIN groups g ON g.id = d.group_id
       WHERE r.id = ${req.params.relayId}
+        AND g.status IN ('active', 'grace')
     `
     if (!relay) return reply.code(404).send({ error: 'not_found' })
+    if (relay.group_status === 'blocked') return reply.code(403).send({ error: 'group_blocked' })
 
     if (req.user.role !== 'superadmin') {
       const [m] = await db`SELECT role FROM user_groups WHERE user_id = ${req.user.id} AND group_id = ${relay.group_id}`
