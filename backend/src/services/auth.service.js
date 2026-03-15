@@ -105,7 +105,26 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
           AND g.status IN ('active', 'grace', 'blocked')
         LIMIT 1
       `
-      user = userRow
+
+      if (userRow) {
+        user = userRow
+      } else {
+        // Попытка 3: tolerant-режим после смены topic
+        // (в БД мог остаться login вида local@old_topic).
+        const [prefixedRow] = await db`
+          SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
+                 u.must_change_password, u.is_active, u.token_version
+          FROM users u
+          JOIN user_groups ug ON ug.user_id = u.id
+          JOIN groups g       ON g.id = ug.group_id
+          WHERE u.login LIKE ${login + '@%'}
+            AND g.mqtt_topic = ${groupTopic}
+            AND u.role IN ('user', 'admin')
+            AND g.status IN ('active', 'grace', 'blocked')
+          LIMIT 1
+        `
+        user = prefixedRow
+      }
     }
   } else {
     // Без @ — только суперадмин
