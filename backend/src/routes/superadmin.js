@@ -14,7 +14,7 @@ async function superadminRoutes(app) {
     return db`
       SELECT u.id, u.login, u.display_name, u.single_session, u.is_active, u.created_at,
              EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) as has_session,
-             (SELECT json_agg(json_build_object('id', g.id, 'name', g.name))
+             (SELECT json_agg(json_build_object('id', g.id, 'name', g.name, 'mqtt_topic', g.mqtt_topic))
               FROM user_groups ug JOIN groups g ON g.id = ug.group_id
               WHERE ug.user_id = u.id AND ug.role = 'admin') as groups
       FROM users u
@@ -144,27 +144,27 @@ async function superadminRoutes(app) {
       RETURNING *
     `
 
-    // Авто-создать пользователя группы
-    const groupUserLogin    = `${mqtt_topic}@user`
-    const groupUserPassword = generatePassword(12)
-    const bcrypt            = require('bcryptjs')
-    const groupUserHash     = await bcrypt.hash(groupUserPassword, 12)
-    const [groupUser] = await db`
+    // Авто-создать администратора группы (вход: admin@mqtt_topic)
+    const adminLogin    = `admin@${mqtt_topic}`
+    const adminPassword = generatePassword(12)
+    const bcrypt        = require('bcryptjs')
+    const adminHash     = await bcrypt.hash(adminPassword, 12)
+    const [admin] = await db`
       INSERT INTO users (login, password_hash, role, must_change_password, single_session, created_by)
-      VALUES (${groupUserLogin}, ${groupUserHash}, 'user', true, true, ${req.user.id})
-      ON CONFLICT (login) DO UPDATE SET password_hash = ${groupUserHash}
+      VALUES (${adminLogin}, ${adminHash}, 'admin', true, true, ${req.user.id})
+      ON CONFLICT (login) DO UPDATE SET password_hash = ${adminHash}
       RETURNING id
     `
     await db`
       INSERT INTO user_groups (user_id, group_id, role, created_by)
-      VALUES (${groupUser.id}, ${group.id}, 'user', ${req.user.id})
+      VALUES (${admin.id}, ${group.id}, 'admin', ${req.user.id})
       ON CONFLICT DO NOTHING
     `
 
     return reply.code(201).send({
       ...group,
-      group_user_login:    groupUserLogin,
-      group_user_password: groupUserPassword,
+      admin_login:    adminLogin,
+      admin_password: adminPassword,
     })
   })
 

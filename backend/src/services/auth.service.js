@@ -75,26 +75,26 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
     const login      = loginStr.substring(0, atIdx)
     const groupTopic = loginStr.substring(atIdx + 1)
 
-    // Попытка 1: пользователь (role=user) в группе
-    const [userRow] = await db`
+    // Попытка 1: точный login (например, admin@group)
+    const [fullLoginRow] = await db`
       SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
              u.must_change_password, u.is_active, u.token_version
       FROM users u
       JOIN user_groups ug ON ug.user_id = u.id
       JOIN groups g       ON g.id = ug.group_id
-      WHERE u.login      = ${login}
+      WHERE u.login      = ${loginStr}
         AND g.mqtt_topic = ${groupTopic}
-        AND u.role       = 'user'
+        AND u.role IN ('user', 'admin')
         AND g.status     = 'active'
         AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
       LIMIT 1
     `
 
-    if (userRow) {
-      user = userRow
+    if (fullLoginRow) {
+      user = fullLoginRow
     } else {
-      // Попытка 2: субадмин (role=admin) в группе
-      const [adminRow] = await db`
+      // Попытка 2 (legacy): login без суффикса группы в users.login
+      const [userRow] = await db`
         SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
                u.must_change_password, u.is_active, u.token_version
         FROM users u
@@ -102,12 +102,12 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
         JOIN groups g       ON g.id = ug.group_id
         WHERE u.login      = ${login}
           AND g.mqtt_topic = ${groupTopic}
-          AND u.role       = 'admin'
+          AND u.role IN ('user', 'admin')
           AND g.status     = 'active'
           AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
         LIMIT 1
       `
-      user = adminRow
+      user = userRow
     }
   } else {
     // Без @ — только суперадмин

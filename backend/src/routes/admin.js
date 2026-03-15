@@ -182,9 +182,11 @@ async function adminRoutes(app) {
             user_id, display_name, phone } = req.body
     let { single_session } = req.body
 
+    const [group] = await db`SELECT user_quota, mqtt_topic FROM groups WHERE id = ${groupId}`
+    if (!group) return reply.code(404).send({ error: 'group_not_found' })
+
     if (role === 'user') {
-      const [group] = await db`SELECT user_quota FROM groups WHERE id = ${groupId}`
-      if (group?.user_quota > 0) {
+      if (group.user_quota > 0) {
         const [{ count }] = await db`SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${groupId} AND role = 'user'`
         if (parseInt(count) >= group.user_quota) return reply.code(403).send({ error: 'quota_exceeded' })
       }
@@ -208,18 +210,14 @@ async function adminRoutes(app) {
       if (!login || !password) return reply.code(400).send({ error: 'login_and_password_required' })
       single_session = (role === 'user' || forceSingleSession) ? true : (single_session ?? true)
 
-      if (role === 'user') {
-        const [taken] = await db`
-          SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id
-          WHERE u.login = ${login} AND ug.group_id = ${groupId} AND u.role = 'user'
-        `
-        if (taken) return reply.code(409).send({ error: 'login_taken' })
-      } else {
-        const [taken] = await db`SELECT id FROM users WHERE login = ${login}`
-        if (taken) return reply.code(409).send({ error: 'login_taken' })
-      }
+      const localLogin = login.includes('@') ? login.split('@')[0] : login
+      if (!localLogin || localLogin.length < 3) return reply.code(400).send({ error: 'invalid_login' })
+      const scopedLogin = `${localLogin}@${group.mqtt_topic}`
 
-      const newUser = await createUser(login, password, role, req.user.id, {
+      const [taken] = await db`SELECT id FROM users WHERE login = ${scopedLogin}`
+      if (taken) return reply.code(409).send({ error: 'login_taken' })
+
+      const newUser = await createUser(scopedLogin, password, role, req.user.id, {
         must_change_password: true, single_session,
         display_name: display_name || null, phone: phone || null,
       })

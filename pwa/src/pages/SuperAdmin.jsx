@@ -176,6 +176,13 @@ function AdminsTab({ data, reload }) {
     try { await saUpdateAdmin(id, { [field]: val }); reload() } catch (e) { alert(e.message) }
   }
 
+  function renderScopedLogin(login, group) {
+    if (!login) return login
+    if (login.includes('@')) return login
+    if (group?.mqtt_topic) return `${login}@${group.mqtt_topic}`
+    return login
+  }
+
   return (
     <div className="sa-tab">
       <div className="sa-toolbar">
@@ -219,7 +226,7 @@ function AdminsTab({ data, reload }) {
         {data.map(a => (
           <div key={a.id} className="sa-row">
             <div className="sa-row-main">
-              <span className="sa-row-login">{a.login}</span>
+              <span className="sa-row-login">{renderScopedLogin(a.login, (a.groups || [])[0])}</span>
               {a.display_name && <span className="sa-row-name">{a.display_name}</span>}
               {a.has_session  && <span className="session-dot" title="Активная сессия">●</span>}
               {!a.is_active   && <span className="badge-inactive">заблокирован</span>}
@@ -231,7 +238,7 @@ function AdminsTab({ data, reload }) {
             {(a.groups || []).length > 0 && (
               <div className="sa-row-groups">
                 {a.groups.map(g => (
-                  <span key={g.id} className="badge-group">{g.name}</span>
+                  <span key={g.id} className="badge-group">{g.name} · {renderScopedLogin(a.login, g)}</span>
                 ))}
               </div>
             )}
@@ -460,7 +467,7 @@ function GroupsTab({ data, reload, onCreds }) {
                 <span style={{ fontSize: 12, color: 'var(--text2)' }}>Адм: </span>
                 {g.admins.map(a => (
                   <span key={a.id} className="badge-admin">
-                    {a.login}
+                    {a.login.includes('@') ? a.login : `${a.login}@${g.mqtt_topic}`}
                     <button className="badge-remove"
                             onClick={() => handleRemoveAdmin(g.id, a.id)}>×</button>
                   </span>
@@ -477,7 +484,7 @@ function GroupsTab({ data, reload, onCreds }) {
               >
                 <option value="">— выбрать администратора —</option>
                 {allAdmins.map(a => (
-                  <option key={a.id} value={a.id}>{a.login}</option>
+                  <option key={a.id} value={a.id}>{a.login.includes('@') ? a.login : `${a.login}@${g.mqtt_topic}`}</option>
                 ))}
               </select>
               <button className="btn btn-outline btn-xs"
