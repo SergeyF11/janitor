@@ -29,10 +29,24 @@ async function connect() {
   client.on('connect', () => {
     console.log(`[mqtt] Connected to ${url}`)
     const registryId = process.env.YC_REGISTRY_ID
-    const topic = `$registries/${registryId}/events/#`
+    //const topic = `$registries/${registryId}/events/#`
+    if (!registryId) {
+      console.error('[mqtt] YC_REGISTRY_ID is empty, skip subscribe')
+      return
+    }
+
+    const topic = `$registries/${registryId}/events`
     client.subscribe(topic, { qos: 1 }, (err, granted) => {
-      console.log(`[mqtt] Subscribe to ${topic}: err=${err}, granted=${JSON.stringify(granted)}`)
+      if (err) {
+        console.error('[mqtt] subscribe error:', err.message)
+        return
+      }
+      console.log('[mqtt] subscribed:', granted?.map((g) => `${g.topic} qos=${g.qos}`).join(', ') || topic)
     })
+
+    // client.subscribe(topic, { qos: 1 }, (err, granted) => {
+    //   console.log(`[mqtt] Subscribe to ${topic}: err=${err}, granted=${JSON.stringify(granted)}`)
+    // })
   })
 
   client.on('message', async (topic, payload) => {
@@ -52,16 +66,39 @@ async function connect() {
 
 async function handleMessage(topic, payload) {
   const db = getDb()
-  const eventsMatch = topic.match(/^\$registries\/([^/]+)\/events/)
-  if (!eventsMatch) return
+  // const eventsMatch = topic.match(/^\$registries\/([^/]+)\/events/)
+  // if (!eventsMatch) return
+
   let data
   try { data = JSON.parse(payload) } catch { return }
-  const ycDeviceId = data.device
-  if (!ycDeviceId) return
-  const [dev] = await db`SELECT device_id FROM devices WHERE mqtt_user = ${ycDeviceId}`
-  if (!dev) return
-  const deviceId = dev.device_id
-  try { data = JSON.parse(payload) } catch { return }
+  
+  // const ycDeviceId = data.device
+  // if (!ycDeviceId) return
+  // const [dev] = await db`SELECT device_id FROM devices WHERE mqtt_user = ${ycDeviceId}`
+  // if (!dev) return
+  // const deviceId = dev.device_id
+  // try { data = JSON.parse(payload) } catch { return }
+  
+  // Формат Janitor/YC: $registries/{registryId}/events, device_id в payload.device
+    const registryTopicMatch = topic.match(/^\$registries\/([^/]+)\/events$/)
+    if (!registryTopicMatch) return
+
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      console.warn('[mqtt] skip registry event without object payload')
+      return
+    }
+
+    const deviceId = data.device
+    if (!deviceId) {
+      console.warn('[mqtt] skip registry event without payload.device')
+      return
+    }
+
+    return processDeviceEvent(db, deviceId, data)
+  }
+
+  async function processDeviceEvent(db, deviceId, data) {
+    if (!data) return
 
   // ── offline: {online: false} или LWT ──
   if (data.online === false) {

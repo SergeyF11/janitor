@@ -13,8 +13,8 @@ async function superadminRoutes(app) {
     const db = getDb()
     return db`
       SELECT u.id, u.login, u.display_name, u.single_session, u.is_active, u.created_at,
-             EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) as has_session,
-             (SELECT json_agg(json_build_object('id', g.id, 'name', g.name))
+            EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) as has_session,
+            (SELECT json_agg(json_build_object('id', g.id, 'name', g.name, 'mqtt_topic', g.mqtt_topic))
               FROM user_groups ug JOIN groups g ON g.id = ug.group_id
               WHERE ug.user_id = u.id AND ug.role = 'admin') as groups
       FROM users u
@@ -145,7 +145,7 @@ async function superadminRoutes(app) {
     `
 
     // Авто-создать администратора группы
-    const adminLogin    = `${mqtt_topic}@admins`
+    const adminLogin    = `admin@${mqtt_topic}`
     const adminPassword = generatePassword(12)
     const bcrypt        = require('bcryptjs')
     const adminHash     = await bcrypt.hash(adminPassword, 12)
@@ -163,7 +163,7 @@ async function superadminRoutes(app) {
 
     return reply.code(201).send({
       ...group,
-      admin_login:    adminLogin,
+      admin_login:    `${adminLogin}@${mqtt_topic}`,
       admin_password: adminPassword,
     })
   })
