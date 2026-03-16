@@ -290,7 +290,7 @@ app.patch('/sa/groups/:id', {
         name:        { type: 'string', minLength: 1, maxLength: 100 },
         user_quota:  { type: 'integer', minimum: 0 },
         status:      { type: 'string', enum: ['active', 'blocked'] },
-        expires_at:  { type: 'string', format: 'date-time' },
+        expires_at:  { type: ['string', 'null'],  format: 'date-time' },
       }
     }
   }
@@ -301,7 +301,14 @@ app.patch('/sa/groups/:id', {
 
   if (name        !== undefined) await db`UPDATE groups SET name = ${name}, updated_at = NOW() WHERE id = ${id}`
   if (user_quota  !== undefined) await db`UPDATE groups SET user_quota = ${user_quota}, updated_at = NOW() WHERE id = ${id}`
-  if (status      !== undefined) await db`UPDATE groups SET status = ${status}, updated_at = NOW() WHERE id = ${id}`
+  //if (status      !== undefined) await db`UPDATE groups SET status = ${status}, updated_at = NOW() WHERE id = ${id}`
+  if (status !== undefined) {
+    if (status === 'blocked') {
+      await db`UPDATE groups SET status = 'blocked', blocked_at = NOW(), updated_at = NOW() WHERE id = ${id}`
+    } else if (status === 'active') {
+      await db`UPDATE groups SET status = 'active', blocked_at = NULL, updated_at = NOW() WHERE id = ${id}`
+    }
+  }
   
   if (expires_at !== undefined) {
     let grace_until = null

@@ -19,7 +19,7 @@ async function migrate() {
     DROP TABLE IF EXISTS users           CASCADE;
     DROP TABLE IF EXISTS groups          CASCADE;
 
-    -- ── groups (создаём первой, так как на неё ссылаются) ─────
+    -- ── groups ─────────────────────────────────────────────────
     CREATE TABLE groups (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name        TEXT NOT NULL,
@@ -27,8 +27,9 @@ async function migrate() {
       status      TEXT NOT NULL DEFAULT 'active',
       expires_at  TIMESTAMPTZ,
       grace_until TIMESTAMPTZ,
+      blocked_at  TIMESTAMPTZ,               -- добавлено для планировщика
       user_quota  INTEGER NOT NULL DEFAULT 0,
-      created_by  UUID,  -- временно, внешний ключ добавим позже
+      created_by  UUID,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -56,7 +57,7 @@ async function migrate() {
     -- Уникальный индекс для суперадмина
     CREATE UNIQUE INDEX users_login_unique_for_superadmin ON users (login) WHERE role = 'superadmin';
 
-    -- Добавляем внешний ключ для groups.created_by (теперь users существует)
+    -- Внешний ключ для groups.created_by
     ALTER TABLE groups ADD CONSTRAINT groups_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL;
 
     -- ── refresh_tokens ─────────────────────────────────────────
@@ -73,7 +74,7 @@ async function migrate() {
     -- ── devices ────────────────────────────────────────────────
     CREATE TABLE devices (
       device_id     TEXT PRIMARY KEY,
-      group_id      UUID UNIQUE REFERENCES groups(id) ON DELETE SET NULL,
+      group_id      UUID UNIQUE REFERENCES groups(id) ON DELETE CASCADE,  -- изменено на CASCADE
       mqtt_user     TEXT,
       mqtt_password TEXT,
       is_online     BOOLEAN NOT NULL DEFAULT false,
@@ -156,7 +157,7 @@ async function migrate() {
     FOR EACH ROW EXECUTE FUNCTION auto_delete_orphan_user();
   `)
 
-  // ── Суперадмин ───────────────────────────────────────────────
+  // Суперадмин
   const saLogin    = process.env.SUPERADMIN_LOGIN    || 'superadmin'
   const saPassword = process.env.SUPERADMIN_PASSWORD || 'change_me'
   const saHash     = await bcrypt.hash(saPassword, 12)

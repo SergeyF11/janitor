@@ -3,6 +3,7 @@ require('dotenv').config()
 const fastify = require('fastify')({ logger: true })
 const { migrate } = require('./db/migrate')
 const { initDb } = require('./db/connection')
+const { startScheduler } = require('./jobs/scheduler')
 
 async function buildApp() {
   await fastify.register(require('@fastify/cors'), { origin: process.env.CORS_ORIGIN || true, credentials: true })
@@ -51,6 +52,8 @@ async function buildApp() {
     reply.sendFile('index.html')
   })
 
+  startScheduler()
+  
   return fastify
 }
 
