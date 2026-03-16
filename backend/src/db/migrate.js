@@ -22,7 +22,8 @@ async function migrate() {
     -- ── users ──────────────────────────────────────────────────
     CREATE TABLE users (
       id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      login                TEXT NOT NULL UNIQUE,
+      login                TEXT NOT NULL,
+      registration_group_id UUID,           -- группа, через которую пользователь входит; для суперадмина NULL
       password_hash        TEXT NOT NULL,
       role                 TEXT NOT NULL DEFAULT 'user',
       must_change_password BOOLEAN NOT NULL DEFAULT true,
@@ -34,8 +35,13 @@ async function migrate() {
       created_by           UUID,
       token_version        INTEGER NOT NULL DEFAULT 1,
       created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      FOREIGN KEY (registration_group_id) REFERENCES groups(id) ON DELETE SET NULL,
+      UNIQUE (registration_group_id, login)   -- логин уникален в пределах группы регистрации
     );
+
+    -- Для суперадмина (registration_group_id IS NULL) логин должен быть глобально уникален
+    CREATE UNIQUE INDEX users_login_unique_for_superadmin ON users (login) WHERE role = 'superadmin';
 
     -- ── refresh_tokens ─────────────────────────────────────────
     CREATE TABLE refresh_tokens (
@@ -49,7 +55,6 @@ async function migrate() {
     );
 
     -- ── groups ─────────────────────────────────────────────────
-    -- Группа = ESP устройство (логическая единица доступа)
     CREATE TABLE groups (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name        TEXT NOT NULL,
@@ -64,7 +69,6 @@ async function migrate() {
     );
 
     -- ── devices ────────────────────────────────────────────────
-    -- Физический ESP. Один ESP = одна группа (UNIQUE group_id)
     CREATE TABLE devices (
       device_id     TEXT PRIMARY KEY,
       group_id      UUID UNIQUE REFERENCES groups(id) ON DELETE SET NULL,
@@ -77,7 +81,6 @@ async function migrate() {
     );
 
     -- ── relays ─────────────────────────────────────────────────
-    -- Реле на ESP
     CREATE TABLE relays (
       id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       device_id     TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
@@ -93,8 +96,8 @@ async function migrate() {
     CREATE TABLE user_groups (
       user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       group_id    UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-      role        TEXT NOT NULL DEFAULT 'user',
-      description TEXT,
+      description TEXT,                       -- отображаемое имя в этой группе
+      role        TEXT NOT NULL DEFAULT 'user', -- роль в этой группе ('user' или 'admin')
       created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (user_id, group_id)
@@ -125,7 +128,7 @@ async function migrate() {
       ip          TEXT
     );
 
-    -- ── Индексы ────────────────────────────────────────────────
+    -- Индексы
     CREATE INDEX ON refresh_tokens (user_id);
     CREATE INDEX ON refresh_tokens (expires_at);
     CREATE INDEX ON relays (device_id);
@@ -135,12 +138,12 @@ async function migrate() {
     CREATE INDEX ON event_log (relay_id, ts DESC);
     CREATE INDEX ON event_log (actor_id, ts DESC);
 
-    -- ── Триггер: удалять orphan users (role=user без групп) ────
+    -- Триггер удаления orphan-пользователей (без групп и не superadmin)
     CREATE OR REPLACE FUNCTION auto_delete_orphan_user() RETURNS TRIGGER AS $$
     BEGIN
       DELETE FROM users
       WHERE id = OLD.user_id
-        AND role = 'user'
+        AND role != 'superadmin'
         AND NOT EXISTS (SELECT 1 FROM user_groups WHERE user_id = OLD.user_id);
       RETURN NULL;
     END;
@@ -157,10 +160,11 @@ async function migrate() {
   const saPassword = process.env.SUPERADMIN_PASSWORD || 'change_me'
   const saHash     = await bcrypt.hash(saPassword, 12)
 
+  // Суперадмин имеет registration_group_id = NULL
   await db`
-    INSERT INTO users (login, password_hash, role, must_change_password, single_session)
-    VALUES (${saLogin}, ${saHash}, 'superadmin', false, false)
-    ON CONFLICT (login) DO UPDATE
+    INSERT INTO users (login, registration_group_id, password_hash, role, must_change_password, single_session)
+    VALUES (${saLogin}, NULL, ${saHash}, 'superadmin', false, false)
+    ON CONFLICT (login) WHERE role = 'superadmin' DO UPDATE
       SET password_hash = ${saHash}, role = 'superadmin'
   `
   console.log(`[migrate] Superadmin: ${saLogin}`)

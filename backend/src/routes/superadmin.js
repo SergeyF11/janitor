@@ -9,65 +9,95 @@ async function superadminRoutes(app) {
 
   // ── АДМИНИСТРАТОРЫ ────────────────────────────────────────────
 
-  app.get('/sa/admins', { onRequest: [authenticate, isSuperAdmin] }, async () => {
-    const db = getDb()
-    return db`
-      SELECT u.id, u.login, u.display_name, u.single_session, u.is_active, u.created_at,
-             EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) as has_session,
-             (SELECT json_agg(json_build_object('id', g.id, 'name', g.name))
-              FROM user_groups ug JOIN groups g ON g.id = ug.group_id
-              WHERE ug.user_id = u.id AND ug.role = 'admin') as groups
-      FROM users u
-      WHERE u.role = 'admin'
-      ORDER BY u.created_at DESC
-    `
-  })
+ app.get('/sa/admins', { onRequest: [authenticate, isSuperAdmin] }, async () => {
+  const db = getDb()
+  return db`
+    SELECT
+      u.id,
+      u.login,
+      u.display_name,
+      u.single_session,
+      u.is_active,
+      u.created_at,
+      g_reg.mqtt_topic AS registration_topic,
+      EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) as has_session,
+      (
+        SELECT json_agg(
+          json_build_object(
+            'id', g.id,
+            'name', g.name,
+            'mqtt_topic', g.mqtt_topic,
+            'role', ug.role,
+            'description', ug.description
+          )
+        )
+        FROM user_groups ug
+        JOIN groups g ON g.id = ug.group_id
+        WHERE ug.user_id = u.id AND ug.role = 'admin'
+      ) as admin_groups
+    FROM users u
+    LEFT JOIN groups g_reg ON g_reg.id = u.registration_group_id
+    WHERE u.role = 'admin' OR u.role = 'superadmin' -- superadmin тоже покажем?
+    ORDER BY u.created_at DESC
+  `
+})
 
-  app.post('/sa/admins', {
-    onRequest: [authenticate, isSuperAdmin],
-    schema: {
-      body: {
-        type: 'object', required: ['login', 'password', 'group_id'],
-        properties: {
-          login:          { type: 'string', minLength: 3, maxLength: 100 },
-          password:       { type: 'string', minLength: 6 },
-          group_id:       { type: 'string', format: 'uuid' },
-          single_session: { type: 'boolean', default: true },
-          display_name:   { type: 'string', maxLength: 200 },
-          phone:          { type: 'string', maxLength: 50 },
-        }
+ app.post('/sa/admins', {
+  onRequest: [authenticate, isSuperAdmin],
+  schema: {
+    body: {
+      type: 'object', required: ['login', 'password', 'group_id'],
+      properties: {
+        login:          { type: 'string', minLength: 3, maxLength: 100 },
+        password:       { type: 'string', minLength: 6 },
+        group_id:       { type: 'string', format: 'uuid' },
+        single_session: { type: 'boolean', default: true },
+        display_name:   { type: 'string', maxLength: 200 },
+        phone:          { type: 'string', maxLength: 50 },
+        description:    { type: 'string', maxLength: 500 }, // описание в этой группе
       }
     }
-  }, async (req, reply) => {
-    const db = getDb()
-    // const { login, password, single_session = true, display_name, phone } = req.body
-    // const [taken] = await db`SELECT id FROM users WHERE login = ${login}`
-        const { login, password, group_id, single_session = true, display_name, phone } = req.body
-    const [group] = await db`SELECT id FROM groups WHERE id = ${group_id}`
-    if (!group) return reply.code(404).send({ error: 'group_not_found' })
+  }
+}, async (req, reply) => {
+  const db = getDb()
+  const { login, password, group_id, single_session = true, display_name, phone, description } = req.body
 
-    const normalizedLogin = String(login).split('@')[0].trim()
-    if (normalizedLogin.length < 3) return reply.code(400).send({ error: 'login_too_short' })
+  // Проверить существование группы
+  const [group] = await db`SELECT id FROM groups WHERE id = ${group_id}`
+  if (!group) return reply.code(404).send({ error: 'group_not_found' })
 
-    const [taken] = await db`SELECT id FROM users WHERE login = ${normalizedLogin}`
+  // Проверить уникальность логина в группе регистрации
+  const [taken] = await db`
+    SELECT id FROM users
+    WHERE login = ${login} AND registration_group_id = ${group_id}
+  `
+  if (taken) return reply.code(409).send({ error: 'login_taken_in_group' })
 
-    if (taken) return reply.code(409).send({ error: 'login_taken' })
-    //const user = await createUser(login, password, 'admin', req.user.id, {
-  const user = await createUser(normalizedLogin, password, 'admin', req.user.id, {
+  // Создать пользователя с registration_group_id = group_id, роль admin
+  const user = await createUser(
+    login,
+    password,
+    'admin',
+    req.user.id,
+    group_id,
+    {
+      must_change_password: true,
+      single_session,
+      display_name: display_name || null,
+      phone: phone || null,
+    }
+  )
 
-      must_change_password: true, single_session,
-      display_name: display_name || null, phone: phone || null,
-    })
+  // Добавить запись в user_groups для этой группы с ролью admin и description
+  await db`
+    INSERT INTO user_groups (user_id, group_id, role, description, created_by)
+    VALUES (${user.id}, ${group_id}, 'admin', ${description || null}, ${req.user.id})
+    ON CONFLICT (user_id, group_id) DO UPDATE SET role = 'admin', description = EXCLUDED.description
+  `
 
+  return reply.code(201).send(user)
+})
 
-    await db`
-      INSERT INTO user_groups (user_id, group_id, role, created_by)
-      VALUES (${user.id}, ${group_id}, 'admin', ${req.user.id})
-      ON CONFLICT (user_id, group_id) DO UPDATE SET role = 'admin'
-    `
-
-    return reply.code(201).send(user)
-  })
 
   app.patch('/sa/admins/:id', {
     onRequest: [authenticate, isSuperAdmin],
@@ -120,77 +150,120 @@ async function superadminRoutes(app) {
 
   // ── ГРУППЫ ───────────────────────────────────────────────────
 
-  app.get('/sa/groups', { onRequest: [authenticate, isSuperAdmin] }, async () => {
-    const db = getDb()
-    return db`
-      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until,
-             g.user_quota, g.created_at, g.updated_at,
-             COUNT(ug.user_id) FILTER (WHERE ug.role = 'user')  as user_count,
-             COUNT(ug.user_id) FILTER (WHERE ug.role = 'admin') as admin_count,
-             d.device_id, d.is_online, d.fw_version, d.last_seen,
-             (SELECT json_agg(json_build_object('id', r.id, 'index', r.relay_index, 'name', r.name, 'duration_ms', r.duration_ms, 'state', r.last_state))
-              FROM relays r WHERE r.device_id = d.device_id) as relays
-      FROM groups g
-      LEFT JOIN user_groups ug ON ug.group_id = g.id
-      LEFT JOIN devices d ON d.group_id = g.id
-      GROUP BY g.id, d.device_id, d.is_online, d.fw_version, d.last_seen
-      ORDER BY g.name
-    `
-  })
+ app.get('/sa/groups', { onRequest: [authenticate, isSuperAdmin] }, async () => {
+  const db = getDb()
+  return db`
+    SELECT
+      g.id,
+      g.name,
+      g.mqtt_topic,
+      g.status,
+      g.expires_at,
+      g.grace_until,
+      g.user_quota,
+      g.created_at,
+      g.updated_at,
+      COUNT(ug.user_id) FILTER (WHERE ug.role = 'user')  as user_count,
+      COUNT(ug.user_id) FILTER (WHERE ug.role = 'admin') as admin_count,
+      d.device_id,
+      d.is_online,
+      d.fw_version,
+      d.last_seen,
+      (
+        SELECT json_agg(
+          json_build_object(
+            'id', r.id,
+            'index', r.relay_index,
+            'name', r.name,
+            'duration_ms', r.duration_ms,
+            'state', r.last_state
+          )
+        )
+        FROM relays r WHERE r.device_id = d.device_id
+      ) as relays,
+      (
+        SELECT json_agg(
+          json_build_object(
+            'id', u.id,
+            'login', u.login,
+            'registration_topic', g_reg.mqtt_topic,
+            'role', ug.role,
+            'description', ug.description
+          )
+        )
+        FROM user_groups ug
+        JOIN users u ON u.id = ug.user_id
+        LEFT JOIN groups g_reg ON g_reg.id = u.registration_group_id
+        WHERE ug.group_id = g.id AND ug.role = 'admin'
+      ) as admins
+    FROM groups g
+    LEFT JOIN user_groups ug ON ug.group_id = g.id
+    LEFT JOIN devices d ON d.group_id = g.id
+    GROUP BY g.id, d.device_id, d.is_online, d.fw_version, d.last_seen
+    ORDER BY g.name
+  `
+})
 
-  app.post('/sa/groups', {
-    onRequest: [authenticate, isSuperAdmin],
-    schema: {
-      body: {
-        type: 'object', required: ['name', 'mqtt_topic'],
-        properties: {
-          name:       { type: 'string', minLength: 1, maxLength: 100 },
-          mqtt_topic: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[a-z0-9_-]+$' },
-          user_quota: { type: 'integer', minimum: 0, default: 0 },
-          expires_at: { type: 'string', format: 'date-time' },
-        }
+ app.post('/sa/groups', {
+  onRequest: [authenticate, isSuperAdmin],
+  schema: {
+    body: {
+      type: 'object', required: ['name', 'mqtt_topic'],
+      properties: {
+        name:       { type: 'string', minLength: 1, maxLength: 100 },
+        mqtt_topic: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[a-z0-9_-]+$' },
+        user_quota: { type: 'integer', minimum: 0, default: 0 },
+        expires_at: { type: 'string', format: 'date-time' },
       }
     }
-  }, async (req, reply) => {
-    const db = getDb()
-    const { name, mqtt_topic, user_quota = 0, expires_at } = req.body
+  }
+}, async (req, reply) => {
+  const db = getDb()
+  const { name, mqtt_topic, user_quota = 0, expires_at } = req.body
 
-    const [taken] = await db`SELECT id FROM groups WHERE mqtt_topic = ${mqtt_topic}`
-    if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
+  const [taken] = await db`SELECT id FROM groups WHERE mqtt_topic = ${mqtt_topic}`
+  if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
 
-    const [group] = await db`
-      INSERT INTO groups (name, mqtt_topic, user_quota, expires_at, created_by)
-      VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expires_at || null}, ${req.user.id})
-      RETURNING *
-    `
+  const [group] = await db`
+    INSERT INTO groups (name, mqtt_topic, user_quota, expires_at, created_by)
+    VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expires_at || null}, ${req.user.id})
+    RETURNING *
+  `
 
-    // Авто-создать администратора группы
-    const adminLogin    = `${mqtt_topic}`
-    const adminPassword = generatePassword(12)
-    const bcrypt        = require('bcryptjs')
-    const adminHash     = await bcrypt.hash(adminPassword, 12)
+  // Авто-создать администратора группы
+  const adminLogin    = mqtt_topic  // или можно использовать mqtt_topic как логин
+  const adminPassword = generatePassword(12)
+  const bcrypt        = require('bcryptjs')
+  const adminHash     = await bcrypt.hash(adminPassword, 12)
 
-    const [takenAdminLogin] = await db`SELECT id FROM users WHERE login = ${adminLogin}`
-    if (takenAdminLogin) return reply.code(409).send({ error: 'admin_login_taken' })
+  // Проверяем, нет ли уже пользователя с таким логином в этой группе
+  const [takenAdmin] = await db`
+    SELECT id FROM users WHERE login = ${adminLogin} AND registration_group_id = ${group.id}
+  `
+  if (takenAdmin) {
+    // если такой логин уже есть (маловероятно), генерируем уникальный
+    adminLogin = mqtt_topic + '_' + Date.now()
+  }
 
+  const [admin] = await db`
+    INSERT INTO users (login, registration_group_id, password_hash, role, must_change_password, single_session, created_by)
+    VALUES (${adminLogin}, ${group.id}, ${adminHash}, 'admin', true, true, ${req.user.id})
+    RETURNING id
+  `
 
-    const [admin] = await db`
-      INSERT INTO users (login, password_hash, role, must_change_password, single_session, created_by)
-      VALUES (${adminLogin}, ${adminHash}, 'admin', true, true, ${req.user.id})
-      RETURNING id
-    `
-    await db`
-      INSERT INTO user_groups (user_id, group_id, role, created_by)
-      VALUES (${admin.id}, ${group.id}, 'admin', ${req.user.id})
-      ON CONFLICT DO NOTHING
-    `
+  // Добавляем запись в user_groups
+  await db`
+    INSERT INTO user_groups (user_id, group_id, role, created_by)
+    VALUES (${admin.id}, ${group.id}, 'admin', ${req.user.id})
+    ON CONFLICT DO NOTHING
+  `
 
-    return reply.code(201).send({
-      ...group,
-      admin_login:    adminLogin,
-      admin_password: adminPassword,
-    })
+  return reply.code(201).send({
+    ...group,
+    admin_login:    adminLogin,
+    admin_password: adminPassword,
   })
+})
 
   app.patch('/sa/groups/:id', {
     onRequest: [authenticate, isSuperAdmin],
@@ -226,67 +299,114 @@ async function superadminRoutes(app) {
     return { ok: true }
   })
 
-  app.post('/sa/groups/:id/admins', {
-    onRequest: [authenticate, isSuperAdmin],
-    schema: { body: { type: 'object', required: ['admin_id'], properties: { admin_id: { type: 'string', format: 'uuid' } } } }
-  }, async (req, reply) => {
-    const db = getDb()
-    const [admin] = await db`SELECT id, role FROM users WHERE id = ${req.body.admin_id}`
-    if (!admin) return reply.code(404).send({ error: 'user_not_found' })
-    if (admin.role !== 'admin') return reply.code(400).send({ error: 'user_is_not_admin' })
-    await db`
-      INSERT INTO user_groups (user_id, group_id, role, created_by)
-      VALUES (${req.body.admin_id}, ${req.params.id}, 'admin', ${req.user.id})
-      ON CONFLICT (user_id, group_id) DO UPDATE SET role = 'admin'
-    `
-    return { ok: true }
-  })
+app.post('/sa/groups/:id/admins', {
+  onRequest: [authenticate, isSuperAdmin],
+  schema: { body: { type: 'object', required: ['admin_id'], properties: { admin_id: { type: 'string', format: 'uuid' } } } }
+}, async (req, reply) => {
+  const db = getDb()
+  const groupId = req.params.id
+  const adminId = req.body.admin_id
 
-  app.delete('/sa/groups/:id/admins/:adminId', { onRequest: [authenticate, isSuperAdmin] }, async (req) => {
-    const db = getDb()
-    await db`DELETE FROM user_groups WHERE group_id = ${req.params.id} AND user_id = ${req.params.adminId} AND role = 'admin'`
-    return { ok: true }
-  })
+  const [admin] = await db`SELECT id, role FROM users WHERE id = ${adminId}`
+  if (!admin) return reply.code(404).send({ error: 'user_not_found' })
+  if (admin.role !== 'admin' && admin.role !== 'superadmin') {
+    return reply.code(400).send({ error: 'user_is_not_admin' })
+  }
+
+  // Проверить, не состоит ли уже
+  const [exists] = await db`SELECT 1 FROM user_groups WHERE user_id = ${adminId} AND group_id = ${groupId}`
+  if (exists) return reply.code(409).send({ error: 'already_in_group' })
+
+  await db`
+    INSERT INTO user_groups (user_id, group_id, role, created_by)
+    VALUES (${adminId}, ${groupId}, 'admin', ${req.user.id})
+  `
+
+  return { ok: true }
+})
+
+app.delete('/sa/groups/:id/admins/:adminId', { onRequest: [authenticate, isSuperAdmin] }, async (req, reply) => {
+  const db = getDb()
+  const groupId = req.params.id
+  const adminId = req.params.adminId
+
+  // Удаляем запись из user_groups
+  await db`DELETE FROM user_groups WHERE group_id = ${groupId} AND user_id = ${adminId} AND role = 'admin'`
+
+  // Проверяем, остались ли у пользователя другие группы с ролью admin
+  const [otherAdminGroups] = await db`
+    SELECT COUNT(*) AS count FROM user_groups WHERE user_id = ${adminId} AND role = 'admin'
+  `
+  if (parseInt(otherAdminGroups.count) === 0) {
+    // Если не осталось, понижаем глобальную роль до user (если это не суперадмин)
+    await db`UPDATE users SET role = 'user' WHERE id = ${adminId} AND role != 'superadmin'`
+  }
+
+  return { ok: true }
+})
 
   // ── ПОЛЬЗОВАТЕЛИ ─────────────────────────────────────────────
 
-  app.get('/sa/users', {
-    onRequest: [authenticate, isSuperAdmin],
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: {
-          role:     { type: 'string' },
-          search:   { type: 'string' },
-          group_id: { type: 'string' },
-          limit:    { type: 'integer', default: 50, maximum: 200 },
-          offset:   { type: 'integer', default: 0 },
-        }
+app.get('/sa/users', {
+  onRequest: [authenticate, isSuperAdmin],
+  schema: {
+    querystring: {
+      type: 'object',
+      properties: {
+        role:     { type: 'string' },
+        search:   { type: 'string' },
+        group_id: { type: 'string' },
+        limit:    { type: 'integer', default: 50, maximum: 200 },
+        offset:   { type: 'integer', default: 0 },
       }
     }
-  }, async (req) => {
-    const db = getDb()
-    const { role, search, group_id, limit = 50, offset = 0 } = req.query
+  }
+}, async (req) => {
+  const db = getDb()
+  const { role, search, group_id, limit = 50, offset = 0 } = req.query
 
-    let query = db`
-      SELECT u.id, u.login, u.display_name, u.role, u.single_session, u.is_active,
-             u.must_change_password, u.created_at,
-             EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) as has_session,
-             (SELECT COUNT(*) FROM user_groups ug WHERE ug.user_id = u.id) as group_count
-      FROM users u
-    `
-    const where = []
-    if (role)     where.push(db`u.role = ${role}`)
-    if (search)   where.push(db`(u.login ILIKE ${'%' + search + '%'} OR u.display_name ILIKE ${'%' + search + '%'})`)
-    if (group_id) where.push(db`EXISTS (SELECT 1 FROM user_groups ug WHERE ug.user_id = u.id AND ug.group_id = ${group_id}::uuid)`)
+  let query = db`
+    SELECT
+      u.id,
+      u.login,
+      u.display_name,
+      u.role AS global_role,
+      u.single_session,
+      u.is_active,
+      u.must_change_password,
+      u.created_at,
+      g_reg.mqtt_topic AS registration_topic,
+      EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) as has_session,
+      (
+        SELECT json_agg(
+          json_build_object(
+            'id', g.id,
+            'name', g.name,
+            'mqtt_topic', g.mqtt_topic,
+            'role', ug.role,
+            'description', ug.description
+          )
+        )
+        FROM user_groups ug
+        JOIN groups g ON g.id = ug.group_id
+        WHERE ug.user_id = u.id
+      ) as groups
+    FROM users u
+    LEFT JOIN groups g_reg ON g_reg.id = u.registration_group_id
+  `
+  const where = []
+  if (role)     where.push(db`u.role = ${role}`)
+  if (search)   where.push(db`(u.login ILIKE ${'%' + search + '%'} OR u.display_name ILIKE ${'%' + search + '%'})`)
+  if (group_id) where.push(db`EXISTS (SELECT 1 FROM user_groups ug WHERE ug.user_id = u.id AND ug.group_id = ${group_id}::uuid)`)
 
-    if (where.length > 0) {
-      query = db`${query} WHERE ${where[0]}`
-      for (let i = 1; i < where.length; i++) query = db`${query} AND ${where[i]}`
-    }
-    query = db`${query} ORDER BY u.created_at DESC LIMIT ${limit} OFFSET ${offset}`
-    return query
-  })
+  if (where.length > 0) {
+    query = db`${query} WHERE ${where[0]}`
+    for (let i = 1; i < where.length; i++) query = db`${query} AND ${where[i]}`
+  }
+  query = db`${query} ORDER BY u.created_at DESC LIMIT ${limit} OFFSET ${offset}`
+  return query
+})
+
 
   app.post('/sa/users/:id/reset-password', {
     onRequest: [authenticate, isSuperAdmin],

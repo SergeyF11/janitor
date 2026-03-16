@@ -136,8 +136,7 @@ function StatsTab({ data }) {
 // ── Администраторы ────────────────────────────────────────────
 function AdminsTab({ data, reload }) {
   const [showCreate, setShowCreate] = useState(false)
-  //const [form, setForm]     = useState({ login: '', password: '', single_session: true })
-  const [form, setForm]     = useState({ login: '', password: '', group_id: '', single_session: true })
+  const [form, setForm]     = useState({ login: '', password: '', group_id: '', single_session: true , description: ''})
   const [resetPwd, setResetPwd] = useState({})
   const [groups, setGroups] = useState([])
   const [saving, setSaving] = useState(false)
@@ -235,6 +234,15 @@ function AdminsTab({ data, reload }) {
               {scopedPreview && <div className="sa-row-meta" style={{ marginTop: 6 }}>Логин: <code>{scopedPreview}</code></div>}
             </div>
 
+            <div className="field">
+                <label>Описание в группе</label>
+                <input
+                  value={form.description}
+                  onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                  placeholder="Необязательно"
+                />
+            </div>
+
             <div className="field field-checkbox">
               <label>
                 <input type="checkbox" checked={form.single_session}
@@ -255,7 +263,8 @@ function AdminsTab({ data, reload }) {
         {data.map(a => (
           <div key={a.id} className="sa-row">
             <div className="sa-row-main">
-              <span className="sa-row-login">{a.login}</span>
+              {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+
               {/* {a.display_name && <span className="sa-row-name">{a.display_name}</span>} */}
               {a.has_session  && <span className="session-dot" title="Активная сессия">●</span>}
               {!a.is_active   && <span className="badge-inactive">заблокирован</span>}
@@ -267,7 +276,10 @@ function AdminsTab({ data, reload }) {
             {(a.groups || []).length > 0 && (
               <div className="sa-row-groups"  title="Администрируемые группы">
                 {a.groups.map(g => (
-                  <span key={g.id} className="badge-group">{g.name}</span>
+                  <span key={g.id} className="badge-group">
+                    {g.name}
+                    {g.description && <span style={{ marginLeft: 4, fontSize: '0.9em', color: 'var(--text2)' }}>({g.description})</span>}
+                  </span>
                 ))}
               </div>
             )}
@@ -497,9 +509,8 @@ function GroupsTab({ data, reload, onCreds }) {
                 <span style={{ fontSize: 12, color: 'var(--text2)' }}>Адм: </span>
                 {g.admins.map(a => (
                   <span key={a.id} className="badge-admin">
-                    {a.login}
-                    <button className="badge-remove"
-                            onClick={() => handleRemoveAdmin(g.id, a.id)}>×</button>
+                    {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+                    <button className="badge-remove" onClick={() => handleRemoveAdmin(g.id, a.id)}>×</button>
                   </span>
                 ))}
               </div>
@@ -512,10 +523,12 @@ function GroupsTab({ data, reload, onCreds }) {
                 value={assignId[g.id] || ''}
                 onChange={e => setAssignId(a => ({ ...a, [g.id]: e.target.value }))}
               >
-                <option value="">— выбрать администратора —</option>
-                {allAdmins.map(a => (
-                  <option key={a.id} value={a.id}>{a.login}</option>
-                ))}
+                 <option value="">— выбрать администратора —</option>
+                  {allAdmins.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+                    </option>
+                  ))}
               </select>
               <button className="btn btn-outline btn-xs"
                       onClick={() => handleAssignAdmin(g.id)}>
@@ -645,7 +658,9 @@ function UsersTab() {
           {users.map(u => (
             <div key={u.id} className="sa-row">
               <div className="sa-row-main">
-                <span className="sa-row-login">{u.login}</span>
+                <span className="sa-row-login">
+                  {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+                </span>
                 {u.display_name && <span className="sa-row-name">{u.display_name}</span>}
                 <span className={`user-role role-${u.role}`}>{u.role}</span>
                 {u.has_session && <span className="session-dot" title="Активная сессия">●</span>}

@@ -84,85 +84,6 @@ export default function Admin({ user, onLogout }) {
 }
 
 // ── Главный экран: кнопки управления реле ────────────────────
-// function RelayView({ group }) {
-//   const [device, setDevice]       = useState(null)
-//   const [pressing, setPressing]   = useState({})
-//   const [lastState, setLastState] = useState({})
-//   const [error, setError]         = useState(null)
-
-//   useEffect(() => {
-//     getGroupDevice(group.id).then(setDevice).catch(() => {})
-//   }, [group.id])
-
-//   async function handleTrigger(relayIndex = 0) {
-//     setError(null)
-//     setPressing(p => ({ ...p, [relayIndex]: true }))
-//     try {
-//       const res = await adminTriggerRelay(group.id, relayIndex)
-//       setLastState(s => ({ ...s, [relayIndex]: res.state }))
-//     } catch (e) {
-//       setError(e.message)
-//     } finally {
-//       setPressing(p => ({ ...p, [relayIndex]: false }))
-//     }
-//   }
-
-//   const isPulse   = group.relay_duration_ms > 0
-//   const hasDevice = !!device?.device_id
-//   const isOnline  = device?.is_online
-
-//   const relays = device?.relay_index != null
-//     ? [{ index: device.relay_index, name: 'Реле ' + (device.relay_index + 1) }]
-//     : [{ index: 0, name: 'Реле 1' }]
-
-//   return (
-//     <div className="relay-view">
-//       {/* Статус устройства */}
-//       <div className="device-status-bar">
-//         <span className={`device-dot-lg ${hasDevice && isOnline ? 'online' : 'offline'}`} />
-//         <span style={{ fontSize: 13, color: 'var(--text2)' }}>
-//           {hasDevice
-//             ? `${isOnline ? 'Онлайн' : 'Оффлайн'} · ${device.device_id}${device.fw_version ? ` · v${device.fw_version}` : ''}`
-//             : 'Устройство не привязано'}
-//         </span>
-//       </div>
-
-//       {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
-
-//       {/* Кнопки реле */}
-//       <div className="relay-buttons">
-//         {relays.map(relay => {
-//           const st   = lastState[relay.index]
-//           const busy = pressing[relay.index]
-//           return (
-//             <button
-//               key={relay.index}
-//               className={`relay-btn${st === 'on' ? ' relay-btn-on' : ''}${busy ? ' relay-btn-busy' : ''}`}
-//               onClick={() => handleTrigger(relay.index)}
-//               disabled={busy || !hasDevice}
-//             >
-//               {busy
-//                 ? <span className="relay-btn-spinner" />
-//                 : <>
-//                     <span className="relay-btn-icon">
-//                       {isPulse ? '⚡' : st === 'on' ? '🔴' : '🟢'}
-//                     </span>
-//                     <span className="relay-btn-label">{relay.name}</span>
-//                     <span className="relay-btn-hint">
-//                       {isPulse
-//                         ? `импульс ${group.relay_duration_ms / 1000} с`
-//                         : st === 'on' ? 'включено' : st === 'off' ? 'выключено' : '—'}
-//                     </span>
-//                   </>
-//               }
-//             </button>
-//           )
-//         })}
-//       </div>
-//     </div>
-//   )
-// }
-
 function RelayView({ group }) {
   const [device, setDevice] = useState(null);
   const [pressing, setPressing] = useState({});   // relayId → bool
@@ -405,7 +326,9 @@ function SettingsView({ group, groups, onBack }) {
             <div key={u.id} className="user-card">
               <div className="user-card-main">
                 <div className="user-info">
-                  <span className="user-login">{u.login}</span>
+                  <span className="user-login">
+                    { u.registration_topic ? `${u.login}@${u.registration_topic}` : u.login }
+                  </span>
                   {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
                   <span className={`user-role role-${u.role}`}>{u.role}</span>
                   {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}

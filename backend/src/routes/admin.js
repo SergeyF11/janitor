@@ -3,7 +3,7 @@ const { getDb } = require('../db/connection')
 const { createUser, resetUserSessions, authenticate, requireRole } = require('../services/auth.service')
 
 async function requireGroupAdmin(req, reply) {
-  const db      = getDb()
+  const db = getDb()
   const groupId = req.params.groupId || req.params.id
   if (!groupId) return reply.code(400).send({ error: 'groupId required' })
   if (req.user.role === 'superadmin') return
@@ -165,19 +165,29 @@ async function adminRoutes(app) {
     onRequest: [authenticate, requireGroupAdmin]
   }, async (req) => {
     const db = getDb()
+    const groupId = req.params.groupId
+
     return db`
-      SELECT u.id, u.login, u.display_name, u.phone,
-             ug.role, ug.description, ug.created_at,
-             u.single_session, u.must_change_password, u.is_active,
-             EXISTS(SELECT 1 FROM refresh_tokens rt
-                    WHERE rt.user_id = u.id AND rt.expires_at > NOW()) AS has_session
+      SELECT
+        u.id,
+        u.login,
+        u.role AS global_role,
+        u.single_session,
+        u.must_change_password,
+        u.is_active,
+        ug.description,
+        ug.role AS group_role,
+        EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) AS has_session,
+        g_reg.mqtt_topic AS registration_topic
       FROM users u
       JOIN user_groups ug ON ug.user_id = u.id
-      WHERE ug.group_id = ${req.params.groupId}
+      LEFT JOIN groups g_reg ON g_reg.id = u.registration_group_id
+      WHERE ug.group_id = ${groupId}
       ORDER BY ug.role DESC, u.login
     `
   })
 
+  // create user
   app.post('/admin/groups/:groupId/users', {
     onRequest: [authenticate, requireGroupAdmin],
     schema: {
@@ -196,70 +206,128 @@ async function adminRoutes(app) {
       }
     }
   }, async (req, reply) => {
-    const db      = getDb()
+    const db = getDb()
     const groupId = req.params.groupId
     const { login, password, role = 'user', description = null,
             user_id, display_name, phone } = req.body
     let { single_session } = req.body
 
+    // Проверка квоты на пользователей
     if (role === 'user') {
       const [group] = await db`SELECT user_quota FROM groups WHERE id = ${groupId}`
       if (group?.user_quota > 0) {
         const [{ count }] = await db`SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${groupId} AND role = 'user'`
-        if (parseInt(count) >= group.user_quota) return reply.code(403).send({ error: 'quota_exceeded' })
+        if (parseInt(count) >= group.user_quota) {
+          return reply.code(403).send({ error: 'quota_exceeded' })
+        }
       }
     }
 
-    // Администратор с single_session не может создавать мультисессионных
+    // Определяем, должен ли пользователь быть single_session
     const [creator] = await db`SELECT single_session FROM users WHERE id = ${req.user.id}`
     const forceSingleSession = creator?.single_session === true
 
     let targetUserId
+    let globalRole // будет определена позже
+
     if (user_id) {
-      const [existing] = await db`SELECT id, role, single_session FROM users WHERE id = ${user_id}`
+      // Добавление существующего пользователя по ID
+      const [existing] = await db`
+        SELECT id, role, single_session FROM users WHERE id = ${user_id}
+      `
       if (!existing) return reply.code(404).send({ error: 'user_not_found' })
       if (existing.role === 'superadmin') return reply.code(403).send({ error: 'forbidden' })
-      // Если создатель single_session — существующий пользователь тоже должен быть
-      if (forceSingleSession && !existing.single_session) {
-        return reply.code(403).send({ error: 'cannot_add_multisession_user' })
-      }
+
+      // Проверяем, не состоит ли уже в группе
+      const [inGroup] = await db`
+        SELECT 1 FROM user_groups WHERE user_id = ${user_id} AND group_id = ${groupId}
+      `
+      if (inGroup) return reply.code(409).send({ error: 'already_in_group' })
+
       targetUserId = user_id
-    } else {
-      if (!login || !password) return reply.code(400).send({ error: 'login_and_password_required' })
-      single_session = (role === 'user' || forceSingleSession) ? true : (single_session ?? true)
+      globalRole = existing.role
 
-      if (role === 'user') {
-        const [taken] = await db`
-          SELECT u.id FROM users u JOIN user_groups ug ON ug.user_id = u.id
-          WHERE u.login = ${login} AND ug.group_id = ${groupId} AND u.role = 'user'
-        `
-        if (taken) return reply.code(409).send({ error: 'login_taken' })
-      } else {
-        const [taken] = await db`SELECT id FROM users WHERE login = ${login}`
-        if (taken) return reply.code(409).send({ error: 'login_taken' })
+      // Если добавляем как администратора, а глобальная роль user, повышаем до admin
+      if (role === 'admin' && globalRole === 'user') {
+        await db`UPDATE users SET role = 'admin' WHERE id = ${targetUserId}`
+        globalRole = 'admin'
       }
+    } else {
+      // Создание нового пользователя
+      if (!login || !password) return reply.code(400).send({ error: 'login_and_password_required' })
 
-      const newUser = await createUser(login, password, role, req.user.id, {
-        must_change_password: true, single_session,
-        display_name: display_name || null, phone: phone || null,
-      })
+      // Проверяем уникальность логина в группе регистрации (текущая группа)
+      const [taken] = await db`
+        SELECT id FROM users WHERE login = ${login} AND registration_group_id = ${groupId}
+      `
+      if (taken) return reply.code(409).send({ error: 'login_taken_in_group' })
+
+      // Создаём пользователя с registration_group_id = текущая группа
+      const newUser = await createUser(
+        login,
+        password,
+        role, // глобальная роль совпадает с запрашиваемой
+        req.user.id,
+        groupId, // registration_group_id
+        {
+          must_change_password: true,
+          single_session: (role === 'user' || forceSingleSession) ? true : (single_session ?? true),
+          display_name: display_name || null,
+          phone: phone || null,
+        }
+      )
       targetUserId = newUser.id
+      globalRole = role
     }
 
-    const [exists] = await db`SELECT 1 FROM user_groups WHERE user_id = ${targetUserId} AND group_id = ${groupId}`
-    if (exists) return reply.code(409).send({ error: 'already_in_group' })
+    // Добавляем запись в user_groups
+    await db`
+      INSERT INTO user_groups (user_id, group_id, description, role, created_by)
+      VALUES (${targetUserId}, ${groupId}, ${description}, ${role}, ${req.user.id})
+    `
 
-    await db`INSERT INTO user_groups (user_id, group_id, role, description, created_by)
-             VALUES (${targetUserId}, ${groupId}, ${role}, ${description}, ${req.user.id})`
     return reply.code(201).send({ ok: true, userId: targetUserId })
   })
 
+  // delete user
   app.delete('/admin/groups/:groupId/users/:userId', {
     onRequest: [authenticate, requireGroupAdmin]
   }, async (req, reply) => {
-    if (req.params.userId === req.user.id) return reply.code(403).send({ error: 'cannot_remove_yourself' })
+    if (req.params.userId === req.user.id) {
+      return reply.code(403).send({ error: 'cannot_remove_yourself' })
+    }
     const db = getDb()
-    await db`DELETE FROM user_groups WHERE group_id = ${req.params.groupId} AND user_id = ${req.params.userId}`
+    const groupId = req.params.groupId
+    const userId = req.params.userId
+
+    // Узнаём роль пользователя в этой группе
+    const [ug] = await db`
+      SELECT role FROM user_groups WHERE group_id = ${groupId} AND user_id = ${userId}
+    `
+    if (!ug) return reply.code(404).send({ error: 'not_found' })
+
+    await db`DELETE FROM user_groups WHERE group_id = ${groupId} AND user_id = ${userId}`
+
+    // Проверяем, остались ли у пользователя другие группы
+    const [otherGroups] = await db`
+      SELECT COUNT(*) AS count FROM user_groups WHERE user_id = ${userId}
+    `
+    if (parseInt(otherGroups.count) === 0) {
+      // Пользователь больше не состоит ни в одной группе — удаляем его (если не суперадмин)
+      await db`DELETE FROM users WHERE id = ${userId} AND role != 'superadmin'`
+    } else {
+      // Если удаляли из группы, где он был админом, и других групп с ролью admin у него не осталось,
+      // понижаем глобальную роль до user
+      if (ug.role === 'admin') {
+        const [adminGroups] = await db`
+          SELECT COUNT(*) AS count FROM user_groups WHERE user_id = ${userId} AND role = 'admin'
+        `
+        if (parseInt(adminGroups.count) === 0) {
+          await db`UPDATE users SET role = 'user' WHERE id = ${userId}`
+        }
+      }
+    }
+
     return { ok: true }
   })
 
@@ -318,37 +386,48 @@ async function adminRoutes(app) {
 
   // ── СЕССИИ / ПАРОЛЬ / ФЛАГИ ───────────────────────────────────
 
+  // Сброс сессий пользователя (администратор группы)
   app.post('/admin/users/:userId/reset-sessions', {
     onRequest: [authenticate, requireRole('admin', 'superadmin')]
-  }, async (req) => {
-    await assertCanManageUser(req.user, req.params.userId, getDb())
+  }, async (req, reply) => {
+    const db = getDb()
+    const { groupId } = req.query // ожидаем groupId в query
+    if (!groupId) return reply.code(400).send({ error: 'groupId required' })
+    await assertCanManageUser(req.user, req.params.userId, groupId, db)
     await resetUserSessions(req.params.userId, req.user.id)
     return { ok: true }
   })
 
+  // Смена пароля пользователя (администратор группы)
   app.post('/admin/users/:userId/password', {
     onRequest: [authenticate, requireRole('admin', 'superadmin')],
     schema: { body: { type: 'object', required: ['password'], properties: { password: { type: 'string', minLength: 6 } } } }
-  }, async (req) => {
+  }, async (req, reply) => {
     const db = getDb()
-    await assertCanManageUser(req.user, req.params.userId, db)
+    const { groupId } = req.query
+    if (!groupId) return reply.code(400).send({ error: 'groupId required' })
+    await assertCanManageUser(req.user, req.params.userId, groupId, db)
     const bcrypt = require('bcryptjs')
     await db`UPDATE users SET password_hash = ${await bcrypt.hash(req.body.password, 10)} WHERE id = ${req.params.userId}`
     return { ok: true }
   })
 
+  // Изменение флага single_session (администратор группы)
   app.patch('/admin/users/:userId/single-session', {
     onRequest: [authenticate, requireRole('admin', 'superadmin')],
     schema: { body: { type: 'object', required: ['single_session'], properties: { single_session: { type: 'boolean' } } } }
   }, async (req, reply) => {
     const db = getDb()
-    await assertCanManageUser(req.user, req.params.userId, db)
+    const { groupId } = req.query
+    if (!groupId) return reply.code(400).send({ error: 'groupId required' })
+    await assertCanManageUser(req.user, req.params.userId, groupId, db)
+
     const [actor] = await db`SELECT single_session FROM users WHERE id = ${req.user.id}`
     if (actor.single_session && !req.body.single_session && req.user.role !== 'superadmin') {
       return reply.code(403).send({ error: 'cannot_remove_restriction' })
     }
     await db`UPDATE users SET single_session = ${req.body.single_session}, updated_at = NOW()
-             WHERE id = ${req.params.userId} AND role != 'superadmin'`
+            WHERE id = ${req.params.userId} AND role != 'superadmin'`
     return { ok: true }
   })
 
@@ -376,40 +455,65 @@ async function adminRoutes(app) {
   })
 
   // ── ИМПОРТ ПОЛЬЗОВАТЕЛЕЙ ──────────────────────────────────────
+app.post('/admin/groups/:groupId/import-from/:sourceGroupId', {
+  onRequest: [authenticate, requireGroupAdmin]
+}, async (req, reply) => {
+  const db = getDb()
+  const targetGroupId = req.params.groupId
+  const sourceGroupId = req.params.sourceGroupId
 
-  app.post('/admin/groups/:groupId/import-from/:sourceGroupId', {
-    onRequest: [authenticate, requireGroupAdmin]
-  }, async (req, reply) => {
-    const db            = getDb()
-    const targetGroupId = req.params.groupId
-    const sourceGroupId = req.params.sourceGroupId
-    const [targetGroup] = await db`SELECT user_quota FROM groups WHERE id = ${targetGroupId}`
-    if (!targetGroup) return reply.code(404).send({ error: 'group_not_found' })
-    const sourceUsers = await db`SELECT user_id, role FROM user_groups WHERE group_id = ${sourceGroupId}`
-    const [{ count }] = await db`SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${targetGroupId} AND role = 'user'`
-    let added = 0, quotaSkipped = 0
-    for (const u of sourceUsers) {
-      const [exists] = await db`SELECT 1 FROM user_groups WHERE group_id = ${targetGroupId} AND user_id = ${u.user_id}`
-      if (exists) continue
-      if (u.role === 'user' && targetGroup.user_quota > 0 && parseInt(count) + added >= targetGroup.user_quota) {
-        quotaSkipped++; continue
-      }
-      await db`INSERT INTO user_groups (user_id, group_id, role, created_by) VALUES (${u.user_id}, ${targetGroupId}, ${u.role}, ${req.user.id})`
-      added++
-    }
-    return { ok: true, added, quotaSkipped }
-  })
-}
+  const [targetGroup] = await db`SELECT user_quota FROM groups WHERE id = ${targetGroupId}`
+  if (!targetGroup) return reply.code(404).send({ error: 'group_not_found' })
 
-async function assertCanManageUser(actor, targetId, db) {
-  if (actor.role === 'superadmin') return
-  const [shared] = await db`
-    SELECT 1 FROM user_groups ug1
-    JOIN user_groups ug2 ON ug2.group_id = ug1.group_id
-    WHERE ug1.user_id = ${actor.id} AND ug1.role = 'admin' AND ug2.user_id = ${targetId}
-    LIMIT 1
+  // Получаем пользователей из исходной группы
+  const sourceUsers = await db`
+    SELECT ug.user_id, ug.role, ug.description, u.login, u.registration_group_id
+    FROM user_groups ug
+    JOIN users u ON u.id = ug.user_id
+    WHERE ug.group_id = ${sourceGroupId}
   `
-  if (!shared) { const e = new Error('forbidden'); e.statusCode = 403; throw e }
+
+  const [{ count: currentCount }] = await db`
+    SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${targetGroupId} AND role = 'user'
+  `
+
+  let added = 0, quotaSkipped = 0
+  for (const su of sourceUsers) {
+    const [exists] = await db`
+      SELECT 1 FROM user_groups WHERE group_id = ${targetGroupId} AND user_id = ${su.user_id}
+    `
+    if (exists) continue
+
+    // Проверка квоты, если импортируемый как user
+    if (su.role === 'user' && targetGroup.user_quota > 0 && (parseInt(currentCount) + added) >= targetGroup.user_quota) {
+      quotaSkipped++
+      continue
+    }
+
+    // Добавляем в user_groups с той же ролью, описанием копируем (или можно оставить пустым)
+    await db`
+      INSERT INTO user_groups (user_id, group_id, description, role, created_by)
+      VALUES (${su.user_id}, ${targetGroupId}, ${su.description || null}, ${su.role}, ${req.user.id})
+    `
+    added++
+  }
+
+  return { ok: true, added, quotaSkipped }
+})
+
+async function assertCanManageUser(actor, targetId, groupId, db) {
+  if (actor.role === 'superadmin') return
+  // Проверяем, что actor является админом в указанной группе
+  const [admin] = await db`
+    SELECT 1 FROM user_groups
+    WHERE user_id = ${actor.id} AND group_id = ${groupId} AND role = 'admin'
+  `
+  if (!admin) { const e = new Error('forbidden'); e.statusCode = 403; throw e }
+  // Проверяем, что target состоит в этой группе (не обязательно админ)
+  const [target] = await db`
+    SELECT 1 FROM user_groups WHERE user_id = ${targetId} AND group_id = ${groupId}
+  `
+  if (!target) { const e = new Error('user_not_in_group'); e.statusCode = 404; throw e }
 }
 
 module.exports = adminRoutes

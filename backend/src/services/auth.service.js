@@ -23,7 +23,7 @@ function buildJwtPayload(user) {
 }
 
 // ── Создать пользователя ──────────────────────────────────────
-async function createUser(login, password, role, createdBy, options = {}) {
+async function createUser(login, password, role, createdBy, registrationGroupId, options = {}) {
   const db = getDb()
   const {
     must_change_password = true,
@@ -33,17 +33,27 @@ async function createUser(login, password, role, createdBy, options = {}) {
     email = null,
   } = options
 
+  // Проверить уникальность (login, registration_group_id)
+  const [existing] = await db`
+    SELECT id FROM users
+    WHERE login = ${login}
+      AND registration_group_id = ${registrationGroupId}
+  `
+  if (existing) throw new Error('login_taken_in_group')
+
   const hash = await bcrypt.hash(password, 12)
   const [user] = await db`
     INSERT INTO users (
       login, password_hash, role, created_by,
       must_change_password, single_session,
-      display_name, phone, email
+      display_name, phone, email,
+      registration_group_id
     )
     VALUES (
       ${login}, ${hash}, ${role}, ${createdBy},
       ${must_change_password}, ${single_session},
-      ${display_name}, ${phone}, ${email}
+      ${display_name}, ${phone}, ${email},
+      ${registrationGroupId}
     )
     RETURNING id, login, role, single_session, must_change_password, token_version
   `
@@ -62,54 +72,13 @@ async function issueRefreshToken(userId, ip, userAgent) {
   return token
 }
 
-// ── Логин ─────────────────────────────────────────────────────
-// Форматы:
-//   логин@mqtt_topic  → пользователь (role=user) или субадмин (role=admin) группы
-//   логин             → только суперадмин (без привязки к группе)
+/// ── Логин ─────────────────────────────────────────────────────
 async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint = null) {
   const db = getDb()
   let user
 
   const atIdx = loginStr.lastIndexOf('@')
-  if (atIdx > 0) {
-    const login      = loginStr.substring(0, atIdx)
-    const groupTopic = loginStr.substring(atIdx + 1)
-
-    // Попытка 1: пользователь (role=user) в группе
-    const [userRow] = await db`
-      SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
-             u.must_change_password, u.is_active, u.token_version
-      FROM users u
-      JOIN user_groups ug ON ug.user_id = u.id
-      JOIN groups g       ON g.id = ug.group_id
-      WHERE u.login      = ${login}
-        AND g.mqtt_topic = ${groupTopic}
-        AND u.role       = 'user'
-        AND g.status     = 'active'
-        AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
-      LIMIT 1
-    `
-
-    if (userRow) {
-      user = userRow
-    } else {
-      // Попытка 2: субадмин (role=admin) в группе
-      const [adminRow] = await db`
-        SELECT u.id, u.login, u.password_hash, u.role, u.single_session,
-               u.must_change_password, u.is_active, u.token_version
-        FROM users u
-        JOIN user_groups ug ON ug.user_id = u.id
-        JOIN groups g       ON g.id = ug.group_id
-        WHERE u.login      = ${login}
-          AND g.mqtt_topic = ${groupTopic}
-          AND u.role       = 'admin'
-          AND g.status     = 'active'
-          AND (g.expires_at IS NULL OR g.expires_at > NOW() OR g.grace_until > NOW())
-        LIMIT 1
-      `
-      user = adminRow
-    }
-  } else {
+  if (atIdx <= 0) {
     // Без @ — только суперадмин
     const [row] = await db`
       SELECT id, login, password_hash, role, single_session,
@@ -119,6 +88,25 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
         AND role  = 'superadmin'
     `
     user = row
+  } else {
+    const login = loginStr.substring(0, atIdx)
+    const groupTopic = loginStr.substring(atIdx + 1)
+
+    // Находим группу по топику
+    const [group] = await db`
+      SELECT id FROM groups WHERE mqtt_topic = ${groupTopic}
+    `
+    if (!group) throw new Error('invalid_credentials')
+
+    // Ищем пользователя с таким логином в этой группе регистрации
+    const [u] = await db`
+      SELECT id, login, password_hash, role, single_session,
+             must_change_password, is_active, token_version
+      FROM users
+      WHERE login = ${login}
+        AND registration_group_id = ${group.id}
+    `
+    user = u
   }
 
   if (!user) throw new Error('invalid_credentials')
@@ -127,7 +115,7 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
   const valid = await bcrypt.compare(password, user.password_hash)
   if (!valid) throw new Error('invalid_credentials')
 
-  // single_session: одна активная сессия
+  // Проверка single_session
   if (user.single_session) {
     const [existing] = await db`
       SELECT id FROM refresh_tokens
@@ -156,8 +144,8 @@ async function loginUser(loginStr, password, ip, userAgent, fastify, fingerprint
     refreshToken,
     user: {
       id:                   user.id,
-      login:                user.login,
-      role:                 user.role,
+      login:                user.login,       // логин в группе регистрации
+      role:                 user.role,         // глобальная роль (admin/user)
       single_session:       user.single_session,
       must_change_password: user.must_change_password,
     }

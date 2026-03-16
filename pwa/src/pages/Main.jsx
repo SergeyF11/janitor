@@ -224,6 +224,7 @@ function AdminSettings({ group, groups, user, onBack, onLogout }) {
 }
 
 // ── Вкладка: Пользователи ─────────────────────────────────────
+// ── Вкладка: Пользователи (исправленная) ─────────────────────
 function UsersTab({ group, groups, user: currentUser }) {
   const [users, setUsers]             = useState([])
   const [showAdd, setShowAdd]         = useState(false)
@@ -254,7 +255,7 @@ function UsersTab({ group, groups, user: currentUser }) {
       }
       setShowAdd(false); load()
     } catch (err) {
-      if (err.message === 'login_taken')           setAddError('Логин уже занят.')
+      if (err.message === 'login_taken_in_group')   setAddError('Логин уже занят в этой группе.')
       else if (err.message === 'already_in_group') setAddError('Пользователь уже в группе.')
       else if (err.message === 'user_not_found')   setAddError('Пользователь не найден.')
       else if (err.message === 'quota_exceeded')   setAddError(err.body?.message || 'Квота исчерпана.')
@@ -268,6 +269,9 @@ function UsersTab({ group, groups, user: currentUser }) {
     try { await adminResetUserPassword(userId, pwd); setResetPwd(p => ({ ...p, [userId]: '' })); alert('Пароль изменён.') }
     catch (e) { alert(e.message) }
   }
+
+  // Вычисляем полный логин для пользователя
+  const getFullLogin = (u) => u.registration_topic ? `${u.login}@${u.registration_topic}` : u.login
 
   return (
     <div className="tab-content">
@@ -351,91 +355,91 @@ function UsersTab({ group, groups, user: currentUser }) {
 
       <div className="users-list">
         {users.length === 0 && <div className="empty-state">Нет пользователей</div>}
-        {users.map(u => (
-          <div key={u.id} className="user-card">
-            <div className="user-card-main">
-              <div className="user-info">
-                <span className="user-login">
-                    {u.role === 'user'
-                      ? <>{u.login}<span style={{color:'var(--text2)'}}>@{group.mqtt_topic}</span></>
-                      : u.login}
+        {users.map(u => {
+          const fullLogin = getFullLogin(u)
+          return (
+            <div key={u.id} className="user-card">
+              <div className="user-card-main">
+                <div className="user-info">
+                  <span className="user-login">
+                    {u.description || fullLogin}
                   </span>
-                {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
-                <span className={`user-role role-${u.role}`}>{u.role}</span>
-                {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
-                {!u.is_active && <span className="badge-inactive">неактивен</span>}
-              </div>
+                  {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
+                  <span className={`user-role role-${u.role}`}>{u.role}</span>
+                  {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
+                  {!u.is_active && <span className="badge-inactive">неактивен</span>}
+                </div>
 
-              <div className="user-description">
-                {editingDesc === u.id ? (
-                  <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <input type="text" value={editDescValue}
-                           onChange={e => setEditDescValue(e.target.value)}
-                           className="input-inline" style={{ flex: 1, minWidth: 150 }} autoFocus />
-                    <button className="btn btn-primary btn-xs" onClick={async () => {
-                      try { await updateUserDescription(group.id, u.id, editDescValue); setEditingDesc(null); load() }
-                      catch { alert('Ошибка при сохранении') }
-                    }}>✓</button>
-                    <button className="btn btn-outline btn-xs" onClick={() => setEditingDesc(null)}>✕</button>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>{u.description || <span style={{ color: 'var(--text2)' }}>—</span>}</span>
-                    <button className="btn-icon" style={{ fontSize: 14 }}
-                            onClick={() => { setEditingDesc(u.id); setEditDescValue(u.description || '') }}
-                            title="Редактировать описание">✎</button>
-                  </div>
-                )}
-              </div>
-
-              <div className="user-uid">
-                <span className="user-uid-label">Логин:</span>
-                <code className="user-uid-value">
-                  {u.role === 'user' ? u.login + '@' + group.mqtt_topic : u.login}
-                </code>
-                <button className="btn-copy"
-                  onClick={() => navigator.clipboard?.writeText(
-                    u.role === 'user' ? u.login + '@' + group.mqtt_topic : u.login
+                {/* Блок описания с редактированием */}
+                <div className="user-description">
+                  {editingDesc === u.id ? (
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input type="text" value={editDescValue}
+                             onChange={e => setEditDescValue(e.target.value)}
+                             className="input-inline" style={{ flex: 1, minWidth: 150 }} autoFocus />
+                      <button className="btn btn-primary btn-xs" onClick={async () => {
+                        try { await updateUserDescription(group.id, u.id, editDescValue); setEditingDesc(null); load() }
+                        catch { alert('Ошибка при сохранении') }
+                      }}>✓</button>
+                      <button className="btn btn-outline btn-xs" onClick={() => setEditingDesc(null)}>✕</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>{u.description ? u.description : <span style={{ color: 'var(--text2)' }}>—</span>}</span>
+                      <button className="btn-icon" style={{ fontSize: 14 }}
+                              onClick={() => { setEditingDesc(u.id); setEditDescValue(u.description || '') }}
+                              title="Редактировать описание">✎</button>
+                    </div>
                   )}
-                  title="Скопировать логин">📋</button>
-              </div>
-              <div className="user-uid">
-                <span className="user-uid-label">ID:</span>
-                <code className="user-uid-value">{u.id}</code>
-                <button className="btn-copy" onClick={() => navigator.clipboard?.writeText(u.id)} title="Скопировать ID">📋</button>
-              </div>
-            </div>
+                </div>
 
-            <div className="user-card-actions">
-              {u.has_session && (
-                <button className="btn btn-outline btn-xs"
-                        onClick={async () => { await resetUserSessions(u.id); load() }}
-                        title="Сбросить сессию">⏏ Сессия</button>
-              )}
-              {u.id !== currentUser.id && (
-                <button className="btn btn-outline btn-xs"
-                        onClick={async () => { if (confirm('Удалить из группы?')) { await removeUserFromGroup(group.id, u.id); load() } }}>
-                  🗑 Удалить
-                </button>
-              )}
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginTop: 4 }}>
-                <input type="password" placeholder="Новый пароль"
-                       value={resetPwd[u.id] || ''}
-                       onChange={e => setResetPwd(p => ({ ...p, [u.id]: e.target.value }))}
-                       style={{ width: 130, fontSize: 12, padding: '3px 6px',
-                                background: 'var(--bg)', border: '1px solid var(--border)',
-                                color: 'var(--text)', borderRadius: 4 }} />
-                <button className="btn btn-outline btn-xs"
-                        onClick={() => handleResetPwd(u.id)}>🔑</button>
+                {/* Полный логин для входа */}
+                <div className="user-uid">
+                  <span className="user-uid-label">Логин:</span>
+                  <code className="user-uid-value">{fullLogin}</code>
+                  <button className="btn-copy"
+                    onClick={() => navigator.clipboard?.writeText(fullLogin)}
+                    title="Скопировать логин">📋</button>
+                </div>
+                {/* ID */}
+                <div className="user-uid">
+                  <span className="user-uid-label">ID:</span>
+                  <code className="user-uid-value">{u.id}</code>
+                  <button className="btn-copy" onClick={() => navigator.clipboard?.writeText(u.id)} title="Скопировать ID">📋</button>
+                </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                <label style={{ fontSize: 12, color: 'var(--text2)' }}>Одна сессия</label>
-                <input type="checkbox" checked={u.single_session}
-                       onChange={async e => { await updateSingleSession(u.id, e.target.checked); load() }} />
+
+              <div className="user-card-actions">
+                {u.has_session && (
+                  <button className="btn btn-outline btn-xs"
+                          onClick={async () => { await resetUserSessions(u.id); load() }}
+                          title="Сбросить сессию">⏏ Сессия</button>
+                )}
+                {u.id !== currentUser.id && (
+                  <button className="btn btn-outline btn-xs"
+                          onClick={async () => { if (confirm('Удалить из группы?')) { await removeUserFromGroup(group.id, u.id); load() } }}>
+                    🗑 Удалить
+                  </button>
+                )}
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginTop: 4 }}>
+                  <input type="password" placeholder="Новый пароль"
+                         value={resetPwd[u.id] || ''}
+                         onChange={e => setResetPwd(p => ({ ...p, [u.id]: e.target.value }))}
+                         style={{ width: 130, fontSize: 12, padding: '3px 6px',
+                                  background: 'var(--bg)', border: '1px solid var(--border)',
+                                  color: 'var(--text)', borderRadius: 4 }} />
+                  <button className="btn btn-outline btn-xs"
+                          onClick={() => handleResetPwd(u.id)}>🔑</button>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                  <label style={{ fontSize: 12, color: 'var(--text2)' }}>Одна сессия</label>
+                  <input type="checkbox" checked={u.single_session}
+                         onChange={async e => { await updateSingleSession(u.id, e.target.checked); load() }} />
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
