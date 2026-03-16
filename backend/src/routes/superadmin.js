@@ -66,6 +66,15 @@ async function superadminRoutes(app) {
   const [group] = await db`SELECT id FROM groups WHERE id = ${group_id}`
   if (!group) return reply.code(404).send({ error: 'group_not_found' })
 
+  // Проверка квоты группы
+  const [groupInfo] = await db`
+    SELECT user_quota, (SELECT COUNT(*) FROM user_groups WHERE group_id = ${group_id}) AS member_count
+    FROM groups WHERE id = ${group_id}
+  `
+  if (groupInfo.user_quota > 0 && parseInt(groupInfo.member_count) >= groupInfo.user_quota) {
+    return reply.code(403).send({ error: 'quota_exceeded' })
+  }
+
   // Проверить уникальность логина в группе регистрации
   const [taken] = await db`
     SELECT id FROM users

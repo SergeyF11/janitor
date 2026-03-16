@@ -212,14 +212,14 @@ async function adminRoutes(app) {
             user_id, display_name, phone } = req.body
     let { single_session } = req.body
 
-    // Проверка квоты на пользователей
-    if (role === 'user') {
-      const [group] = await db`SELECT user_quota FROM groups WHERE id = ${groupId}`
-      if (group?.user_quota > 0) {
-        const [{ count }] = await db`SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${groupId} AND role = 'user'`
-        if (parseInt(count) >= group.user_quota) {
-          return reply.code(403).send({ error: 'quota_exceeded' })
-        }
+    // Проверка квоты на общее количество участников группы
+    const [group] = await db`SELECT user_quota FROM groups WHERE id = ${groupId}`
+    if (group?.user_quota > 0) {
+      const [{ count }] = await db`
+        SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${groupId}
+      `
+      if (parseInt(count) >= group.user_quota) {
+        return reply.code(403).send({ error: 'quota_exceeded' })
       }
     }
 
@@ -465,16 +465,8 @@ app.post('/admin/groups/:groupId/import-from/:sourceGroupId', {
   const [targetGroup] = await db`SELECT user_quota FROM groups WHERE id = ${targetGroupId}`
   if (!targetGroup) return reply.code(404).send({ error: 'group_not_found' })
 
-  // Получаем пользователей из исходной группы
-  const sourceUsers = await db`
-    SELECT ug.user_id, ug.role, ug.description, u.login, u.registration_group_id
-    FROM user_groups ug
-    JOIN users u ON u.id = ug.user_id
-    WHERE ug.group_id = ${sourceGroupId}
-  `
-
   const [{ count: currentCount }] = await db`
-    SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${targetGroupId} AND role = 'user'
+    SELECT COUNT(*) AS count FROM user_groups WHERE group_id = ${targetGroupId}
   `
 
   let added = 0, quotaSkipped = 0
@@ -484,13 +476,11 @@ app.post('/admin/groups/:groupId/import-from/:sourceGroupId', {
     `
     if (exists) continue
 
-    // Проверка квоты, если импортируемый как user
-    if (su.role === 'user' && targetGroup.user_quota > 0 && (parseInt(currentCount) + added) >= targetGroup.user_quota) {
+    if (targetGroup.user_quota > 0 && (parseInt(currentCount) + added) >= targetGroup.user_quota) {
       quotaSkipped++
       continue
     }
 
-    // Добавляем в user_groups с той же ролью, описанием копируем (или можно оставить пустым)
     await db`
       INSERT INTO user_groups (user_id, group_id, description, role, created_by)
       VALUES (${su.user_id}, ${targetGroupId}, ${su.description || null}, ${su.role}, ${req.user.id})
