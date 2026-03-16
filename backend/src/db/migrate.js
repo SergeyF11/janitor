@@ -15,15 +15,29 @@ async function migrate() {
     DROP TABLE IF EXISTS user_groups     CASCADE;
     DROP TABLE IF EXISTS relays          CASCADE;
     DROP TABLE IF EXISTS devices         CASCADE;
-    DROP TABLE IF EXISTS groups          CASCADE;
     DROP TABLE IF EXISTS refresh_tokens  CASCADE;
     DROP TABLE IF EXISTS users           CASCADE;
+    DROP TABLE IF EXISTS groups          CASCADE;
+
+    -- ── groups (создаём первой, так как на неё ссылаются) ─────
+    CREATE TABLE groups (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name        TEXT NOT NULL,
+      mqtt_topic  TEXT NOT NULL UNIQUE,
+      status      TEXT NOT NULL DEFAULT 'active',
+      expires_at  TIMESTAMPTZ,
+      grace_until TIMESTAMPTZ,
+      user_quota  INTEGER NOT NULL DEFAULT 0,
+      created_by  UUID,  -- временно, внешний ключ добавим позже
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
     -- ── users ──────────────────────────────────────────────────
     CREATE TABLE users (
       id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       login                TEXT NOT NULL,
-      registration_group_id UUID,           -- группа, через которую пользователь входит; для суперадмина NULL
+      registration_group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
       password_hash        TEXT NOT NULL,
       role                 TEXT NOT NULL DEFAULT 'user',
       must_change_password BOOLEAN NOT NULL DEFAULT true,
@@ -32,16 +46,18 @@ async function migrate() {
       display_name         TEXT,
       email                TEXT,
       phone                TEXT,
-      created_by           UUID,
+      created_by           UUID REFERENCES users(id) ON DELETE SET NULL,
       token_version        INTEGER NOT NULL DEFAULT 1,
       created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      FOREIGN KEY (registration_group_id) REFERENCES groups(id) ON DELETE SET NULL,
-      UNIQUE (registration_group_id, login)   -- логин уникален в пределах группы регистрации
+      UNIQUE (registration_group_id, login)
     );
 
-    -- Для суперадмина (registration_group_id IS NULL) логин должен быть глобально уникален
+    -- Уникальный индекс для суперадмина
     CREATE UNIQUE INDEX users_login_unique_for_superadmin ON users (login) WHERE role = 'superadmin';
+
+    -- Добавляем внешний ключ для groups.created_by (теперь users существует)
+    ALTER TABLE groups ADD CONSTRAINT groups_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL;
 
     -- ── refresh_tokens ─────────────────────────────────────────
     CREATE TABLE refresh_tokens (
@@ -52,20 +68,6 @@ async function migrate() {
       user_agent  TEXT,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       expires_at  TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 days'
-    );
-
-    -- ── groups ─────────────────────────────────────────────────
-    CREATE TABLE groups (
-      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name        TEXT NOT NULL,
-      mqtt_topic  TEXT NOT NULL UNIQUE,
-      status      TEXT NOT NULL DEFAULT 'active',
-      expires_at  TIMESTAMPTZ,
-      grace_until TIMESTAMPTZ,
-      user_quota  INTEGER NOT NULL DEFAULT 0,
-      created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     -- ── devices ────────────────────────────────────────────────
@@ -96,8 +98,8 @@ async function migrate() {
     CREATE TABLE user_groups (
       user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       group_id    UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-      description TEXT,                       -- отображаемое имя в этой группе
-      role        TEXT NOT NULL DEFAULT 'user', -- роль в этой группе ('user' или 'admin')
+      description TEXT,
+      role        TEXT NOT NULL DEFAULT 'user',
       created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (user_id, group_id)
@@ -138,7 +140,7 @@ async function migrate() {
     CREATE INDEX ON event_log (relay_id, ts DESC);
     CREATE INDEX ON event_log (actor_id, ts DESC);
 
-    -- Триггер удаления orphan-пользователей (без групп и не superadmin)
+    -- Триггер удаления orphan-пользователей
     CREATE OR REPLACE FUNCTION auto_delete_orphan_user() RETURNS TRIGGER AS $$
     BEGIN
       DELETE FROM users
@@ -152,7 +154,6 @@ async function migrate() {
     CREATE TRIGGER trg_auto_delete_orphan_user
     AFTER DELETE ON user_groups
     FOR EACH ROW EXECUTE FUNCTION auto_delete_orphan_user();
-
   `)
 
   // ── Суперадмин ───────────────────────────────────────────────
@@ -160,7 +161,6 @@ async function migrate() {
   const saPassword = process.env.SUPERADMIN_PASSWORD || 'change_me'
   const saHash     = await bcrypt.hash(saPassword, 12)
 
-  // Суперадмин имеет registration_group_id = NULL
   await db`
     INSERT INTO users (login, registration_group_id, password_hash, role, must_change_password, single_session)
     VALUES (${saLogin}, NULL, ${saHash}, 'superadmin', false, false)

@@ -12,7 +12,7 @@ async function userRoutes(app) {
 
     const groups = await db`
       SELECT
-        g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.blocked_at,
+        g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until,
         ug.role, ug.description,
         d.device_id,
         COALESCE(d.is_online, false) AS device_online

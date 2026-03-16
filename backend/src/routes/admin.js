@@ -23,7 +23,7 @@ async function adminRoutes(app) {
   }, async (req) => {
     const db = getDb()
     return db`
-      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.blocked_at, g.user_quota,
+      SELECT g.id, g.name, g.mqtt_topic, g.status, g.expires_at, g.grace_until, g.user_quota,
              COUNT(ug2.user_id) FILTER (WHERE ug2.role = 'user') AS user_count,
              d.device_id, COALESCE(d.is_online, false) AS is_online, d.fw_version, d.last_seen
       FROM groups g
@@ -500,6 +500,7 @@ app.post('/admin/groups/:groupId/import-from/:sourceGroupId', {
 
   return { ok: true, added, quotaSkipped }
 })
+}
 
 async function assertCanManageUser(actor, targetId, groupId, db) {
   if (actor.role === 'superadmin') return

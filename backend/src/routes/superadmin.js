@@ -370,30 +370,18 @@ app.get('/sa/users', {
       u.id,
       u.login,
       u.display_name,
-      u.role AS global_role,
+      u.role,
       u.single_session,
       u.is_active,
       u.must_change_password,
       u.created_at,
-      g_reg.mqtt_topic AS registration_topic,
       EXISTS(SELECT 1 FROM refresh_tokens rt WHERE rt.user_id = u.id AND rt.expires_at > NOW()) as has_session,
-      (
-        SELECT json_agg(
-          json_build_object(
-            'id', g.id,
-            'name', g.name,
-            'mqtt_topic', g.mqtt_topic,
-            'role', ug.role,
-            'description', ug.description
-          )
-        )
-        FROM user_groups ug
-        JOIN groups g ON g.id = ug.group_id
-        WHERE ug.user_id = u.id
-      ) as groups
+      (SELECT COUNT(*) FROM user_groups ug WHERE ug.user_id = u.id) as group_count,
+      g_reg.mqtt_topic as registration_topic
     FROM users u
     LEFT JOIN groups g_reg ON g_reg.id = u.registration_group_id
   `
+
   const where = []
   if (role)     where.push(db`u.role = ${role}`)
   if (search)   where.push(db`(u.login ILIKE ${'%' + search + '%'} OR u.display_name ILIKE ${'%' + search + '%'})`)

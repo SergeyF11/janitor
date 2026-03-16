@@ -65,7 +65,7 @@ export default function SuperAdmin({ user, onLogout }) {
     if (tab === 'logs')    return <LogsTab    data={arr} reload={load} />
     return null
   }
-  console.dir(pendingCreds, { depth: null })
+  //console.dir(pendingCreds, { depth: null })
 
   return (
     <div className="sa-screen">
@@ -263,7 +263,9 @@ function AdminsTab({ data, reload }) {
         {data.map(a => (
           <div key={a.id} className="sa-row">
             <div className="sa-row-main">
-              {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+              <span className="sa-row-login">
+                {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+              </span>
 
               {/* {a.display_name && <span className="sa-row-name">{a.display_name}</span>} */}
               {a.has_session  && <span className="session-dot" title="Активная сессия">●</span>}
@@ -659,7 +661,7 @@ function UsersTab() {
             <div key={u.id} className="sa-row">
               <div className="sa-row-main">
                 <span className="sa-row-login">
-                  {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+                  {u.registration_topic ? `${u.login}@${u.registration_topic}` : u.login}
                 </span>
                 {u.display_name && <span className="sa-row-name">{u.display_name}</span>}
                 <span className={`user-role role-${u.role}`}>{u.role}</span>
