@@ -65,7 +65,7 @@ export default function SuperAdmin({ user, onLogout }) {
     if (tab === 'logs')    return <LogsTab    data={arr} reload={load} />
     return null
   }
-  //console.dir(pendingCreds, { depth: null })
+  //console.dir(pendingCreds, { depth: 2 })
 
   return (
     <div className="sa-screen">
@@ -73,7 +73,7 @@ export default function SuperAdmin({ user, onLogout }) {
         <div className="sa-creds-modal">
           <div className="sa-creds-box">
             <div className="sa-creds-title">✅ Группа создана. Данные администратора:</div>
-            <div className="sa-creds-row"><b>Логин:</b> <code>{pendingCreds.login}@{pendingCreds.mqtt_topic}</code></div>
+            <div className="sa-creds-row"><b>Логин:</b> <code>{pendingCreds.login}</code></div>
             <div className="sa-creds-row"><b>Пароль:</b> <code>{pendingCreds.password}</code></div>
             <div className="sa-creds-hint">Сохраните пароль — он больше не будет показан.</div>
             <button className="btn btn-primary" onClick={() => setPendingCreds(null)}>Понятно</button>
@@ -375,7 +375,9 @@ function GroupsTab({ data, reload, onCreds }) {
       setShowCreate(false)
       reload()
       if (result && result.admin_login) {
-        onCreds({ login: result.admin_login, password: result.admin_password })
+        const fullLogin = result.admin_login + '@' + result.mqtt_topic;
+        onCreds({ login: fullLogin, password: result.admin_password });
+        //onCreds({ login: result.admin_login, password: result.admin_password })
       }
     } catch (e) {
       setErr(e.message === 'mqtt_topic_taken' ? 'MQTT топик занят.' : 'Ошибка: ' + e.message)
