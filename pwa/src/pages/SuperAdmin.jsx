@@ -344,6 +344,24 @@ function GroupsTab({ data, reload, onCreds }) {
   const [savingQuota, setSavingQuota] = useState({})
   const [editExpires, setEditExpires] = useState({})   // groupId → string (datetime-local)
   const [savingExpires, setSavingExpires] = useState({})
+  const [filterStatus, setFilterStatus] = useState('all')
+
+  // Функция для проверки, находится ли группа в льготном периоде
+  const isGroupInGrace = (g) => {
+    const now = new Date()
+    return g.status === 'active' && g.grace_until && new Date(g.grace_until) > now
+  }
+
+  // Отфильтрованный список
+  const filteredGroups = data.filter(g => {
+    if (filterStatus === 'all') return true
+    if (filterStatus === 'blocked') return g.status === 'blocked'
+    if (filterStatus === 'grace') return isGroupInGrace(g)
+    if (filterStatus === 'active') {
+      return g.status === 'active' && !isGroupInGrace(g)
+    }
+    return true
+  })
 
 
   useEffect(() => {
@@ -455,10 +473,20 @@ function GroupsTab({ data, reload, onCreds }) {
 
   return (
     <div className="sa-tab">
-      <div className="sa-toolbar">
+      <div className="sa-toolbar" style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
         <button className="btn btn-primary btn-sm" onClick={() => setShowCreate(v => !v)}>
           {showCreate ? 'Отмена' : '+ Создать группу'}
         </button>
+        <select
+          value={filterStatus}
+          onChange={e => setFilterStatus(e.target.value)}
+          style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: '6px 10px', fontSize: 13 }}
+        >
+          <option value="all">Все группы</option>
+          <option value="active">Активные</option>
+          <option value="grace">Льготный период</option>
+          <option value="blocked">Заблокированные</option>
+        </select>
       </div>
 
       {showCreate && (
@@ -483,11 +511,7 @@ function GroupsTab({ data, reload, onCreds }) {
                      onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value, _topic_edited: true }))}
                      placeholder="авто из названия" />
             </div>
-{/*             <div className="field">
-              <label>Длит. реле мс (0=триггер)</label>
-              <input type="number" min="0" value={form.relay_duration_ms}
-                     onChange={e => setForm(f => ({ ...f, relay_duration_ms: +e.target.value }))} />
-            </div> */}
+
             <div className="field">
               <label>Квота (0=∞)</label>
               <input type="number" min="0" value={form.user_quota}
@@ -503,144 +527,151 @@ function GroupsTab({ data, reload, onCreds }) {
 
       <div className="sa-list">
         {data.length === 0 && <div className="empty-state">Нет групп</div>}
-        {data.map(g => (
-  <div key={g.id} className="sa-row">
-    {/* Основная строка с именем, сроком, квотой и метой */}
-    <div className="sa-row-main" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-      {/* Редактирование имени */}
-      {editName[g.id] !== undefined ? (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <input
-            className="input-inline"
-            style={{ width: 140, fontSize: 12 }}
-            value={editName[g.id]}
-            onChange={e => setEditName(t => ({ ...t, [g.id]: e.target.value }))}
-            onKeyDown={e => {
-              if (e.key === 'Enter') handleSaveName(g)
-              if (e.key === 'Escape') setEditName(t => { const c = { ...t }; delete c[g.id]; return c })
-            }}
-            autoFocus
-          />
-          <button className="btn btn-primary btn-xs" disabled={savingName[g.id]} onClick={() => handleSaveName(g)}>
-            {savingName[g.id] ? '...' : '✓'}
-          </button>
-          <button className="btn btn-outline btn-xs" onClick={() => setEditName(t => { const c = { ...t }; delete c[g.id]; return c })}>
-            ✕
-          </button>
-        </span>
-      ) : (
-        <span
-          className="badge-topic"
-          title="Нажмите для редактирования имени"
-          style={{ cursor: 'pointer' }}
-          onClick={() => setEditName(t => ({ ...t, [g.id]: g.name }))}
-        >
-          ✏️ {g.name}
-        </span>
-      )}
+        {filteredGroups.map(g => {
+        const isGrace = isGroupInGrace(g)
+        const isBlocked = g.status === 'blocked'
+        const rowClass = `sa-row ${isBlocked ? 'group-blocked' : isGrace ? 'group-grace' : ''}`
 
-      {/* Срок действия (редактирование) */}
-      {editExpires[g.id] !== undefined ? (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px' }}>
-          <input
-            type="date"
-            value={editExpires[g.id] || ''}
-            onChange={e => setEditExpires(t => ({ ...t, [g.id]: e.target.value }))}
-            style={{ background: 'transparent', border: 'none', color: 'var(--text)', fontSize: 14, colorScheme: 'dark' }}
-          />
-          <button className="btn btn-primary btn-xs" disabled={savingExpires[g.id]} onClick={() => handleSaveExpires(g)}>
-            {savingExpires[g.id] ? '...' : '✓'}
-          </button>
-          <button className="btn btn-outline btn-xs" onClick={() => setEditExpires(t => { const c = { ...t }; delete c[g.id]; return c })}>
-            ✕
-          </button>
-        </span>
-      ) : (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12, color: 'var(--text2)' }}>
-            Срок: {g.expires_at ? new Date(g.expires_at).toLocaleDateString('ru') : 'бессрочно'}
-            {g.grace_until && <span> (грейс до {new Date(g.grace_until).toLocaleDateString('ru')})</span>}
+        return (
+      <div key={g.id} className={rowClass}>
+
+        {/* Основная строка с именем, сроком, квотой и метой */}
+        <div className="sa-row-main" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          {/* Редактирование имени */}
+          {editName[g.id] !== undefined ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <input
+                className="input-inline"
+                style={{ width: 140, fontSize: 12 }}
+                value={editName[g.id]}
+                onChange={e => setEditName(t => ({ ...t, [g.id]: e.target.value }))}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleSaveName(g)
+                  if (e.key === 'Escape') setEditName(t => { const c = { ...t }; delete c[g.id]; return c })
+                }}
+                autoFocus
+              />
+              <button className="btn btn-primary btn-xs" disabled={savingName[g.id]} onClick={() => handleSaveName(g)}>
+                {savingName[g.id] ? '...' : '✓'}
+              </button>
+              <button className="btn btn-outline btn-xs" onClick={() => setEditName(t => { const c = { ...t }; delete c[g.id]; return c })}>
+                ✕
+              </button>
+            </span>
+          ) : (
+            <span
+              className="badge-topic"
+              title="Нажмите для редактирования имени"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setEditName(t => ({ ...t, [g.id]: g.name }))}
+            >
+              ✏️ {g.name}
+            </span>
+          )}
+
+          {/* Срок действия (редактирование) */}
+          {editExpires[g.id] !== undefined ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px' }}>
+              <input
+                type="date"
+                value={editExpires[g.id] || ''}
+                onChange={e => setEditExpires(t => ({ ...t, [g.id]: e.target.value }))}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text)', fontSize: 14, colorScheme: 'dark' }}
+              />
+              <button className="btn btn-primary btn-xs" disabled={savingExpires[g.id]} onClick={() => handleSaveExpires(g)}>
+                {savingExpires[g.id] ? '...' : '✓'}
+              </button>
+              <button className="btn btn-outline btn-xs" onClick={() => setEditExpires(t => { const c = { ...t }; delete c[g.id]; return c })}>
+                ✕
+              </button>
+            </span>
+          ) : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+                Срок: {g.expires_at ? new Date(g.expires_at).toLocaleDateString('ru') : 'бессрочно'}
+                {g.grace_until && <span> (грейс до {new Date(g.grace_until).toLocaleDateString('ru')})</span>}
+              </span>
+              <button className="btn-icon" style={{ fontSize: 14 }} onClick={() => setEditExpires(t => ({ ...t, [g.id]: g.expires_at ? new Date(g.expires_at).toISOString().slice(0,10) : '' }))}>
+                ✎
+              </button>
+            </span>
+          )}
+
+          {/* Растягиваем пустое пространство */}
+          <div style={{ flex: 1 }} />
+
+          {/* Квота – справа */}
+          {editQuota[g.id] !== undefined ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <input
+                type="number"
+                min="0"
+                value={editQuota[g.id] ?? g.user_quota}
+                onChange={e => setEditQuota(t => ({ ...t, [g.id]: e.target.value }))}
+                style={{ width: 60, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 4, padding: '2px 4px', fontSize: 12 }}
+              />
+              <button className="btn btn-primary btn-xs" disabled={savingQuota[g.id]} onClick={() => handleSaveQuota(g)}>
+                {savingQuota[g.id] ? '...' : '✓'}
+              </button>
+              <button className="btn btn-outline btn-xs" onClick={() => setEditQuota(t => { const c = { ...t }; delete c[g.id]; return c })}>
+                ✕
+              </button>
+            </span>
+          ) : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+                {g.user_quota > 0 ? `квота: ${g.user_quota}` : '∞'}
+              </span>
+              <button className="btn-icon" style={{ fontSize: 14 }} onClick={() => setEditQuota(t => ({ ...t, [g.id]: g.user_quota }))}>
+                ✎
+              </button>
+            </span>
+          )}
+
+          {/* Мета: пользователи и администраторы – справа */}
+          <span className="sa-row-meta" style={{ whiteSpace: 'nowrap' }}>
+            {g.user_count} польз. · {g.admin_count} адм.
           </span>
-          <button className="btn-icon" style={{ fontSize: 14 }} onClick={() => setEditExpires(t => ({ ...t, [g.id]: g.expires_at ? new Date(g.expires_at).toISOString().slice(0,10) : '' }))}>
-            ✎
-          </button>
-        </span>
-      )}
+        </div>
 
-      {/* Растягиваем пустое пространство */}
-      <div style={{ flex: 1 }} />
+        {/* Текущие администраторы группы */}
+        {(g.admins || []).length > 0 && (
+          <div className="sa-row-admins">
+            <span style={{ fontSize: 12, color: 'var(--text2)' }}>Адм: </span>
+            {g.admins.map(a => (
+              <span key={a.id} className="badge-admin">
+                {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+                <button className="badge-remove" onClick={() => handleRemoveAdmin(g.id, a.id)}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
 
-      {/* Квота – справа */}
-      {editQuota[g.id] !== undefined ? (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <input
-            type="number"
-            min="0"
-            value={editQuota[g.id] ?? g.user_quota}
-            onChange={e => setEditQuota(t => ({ ...t, [g.id]: e.target.value }))}
-            style={{ width: 60, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 4, padding: '2px 4px', fontSize: 12 }}
-          />
-          <button className="btn btn-primary btn-xs" disabled={savingQuota[g.id]} onClick={() => handleSaveQuota(g)}>
-            {savingQuota[g.id] ? '...' : '✓'}
+        {/* Назначить администратора и действия */}
+        <div className="sa-row-actions">
+          <select
+            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}
+            value={assignId[g.id] || ''}
+            onChange={e => setAssignId(a => ({ ...a, [g.id]: e.target.value }))}
+          >
+            <option value="">— выбрать администратора —</option>
+            {allAdmins.map(a => (
+              <option key={a.id} value={a.id}>
+                {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
+              </option>
+            ))}
+          </select>
+          <button className="btn btn-outline btn-xs" onClick={() => handleAssignAdmin(g.id)}>
+            + Назначить
           </button>
-          <button className="btn btn-outline btn-xs" onClick={() => setEditQuota(t => { const c = { ...t }; delete c[g.id]; return c })}>
-            ✕
+          <button className="btn btn-outline btn-xs" onClick={() => handleToggleStatus(g)}>
+            {g.status === 'active' ? 'Блок' : 'Разблок'}
           </button>
-        </span>
-      ) : (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12, color: 'var(--text2)' }}>
-            {g.user_quota > 0 ? `квота: ${g.user_quota}` : '∞'}
-          </span>
-          <button className="btn-icon" style={{ fontSize: 14 }} onClick={() => setEditQuota(t => ({ ...t, [g.id]: g.user_quota }))}>
-            ✎
-          </button>
-        </span>
-      )}
-
-      {/* Мета: пользователи и администраторы – справа */}
-      <span className="sa-row-meta" style={{ whiteSpace: 'nowrap' }}>
-        {g.user_count} польз. · {g.admin_count} адм.
-      </span>
-    </div>
-
-    {/* Текущие администраторы группы */}
-    {(g.admins || []).length > 0 && (
-      <div className="sa-row-admins">
-        <span style={{ fontSize: 12, color: 'var(--text2)' }}>Адм: </span>
-        {g.admins.map(a => (
-          <span key={a.id} className="badge-admin">
-            {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
-            <button className="badge-remove" onClick={() => handleRemoveAdmin(g.id, a.id)}>×</button>
-          </span>
-        ))}
+          <button className="btn btn-danger btn-xs" onClick={() => handleDelete(g.id, g.name)}>✕</button>
+        </div>
       </div>
-    )}
-
-    {/* Назначить администратора и действия */}
-    <div className="sa-row-actions">
-      <select
-        style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}
-        value={assignId[g.id] || ''}
-        onChange={e => setAssignId(a => ({ ...a, [g.id]: e.target.value }))}
-      >
-        <option value="">— выбрать администратора —</option>
-        {allAdmins.map(a => (
-          <option key={a.id} value={a.id}>
-            {a.registration_topic ? `${a.login}@${a.registration_topic}` : a.login}
-          </option>
-        ))}
-      </select>
-      <button className="btn btn-outline btn-xs" onClick={() => handleAssignAdmin(g.id)}>
-        + Назначить
-      </button>
-      <button className="btn btn-outline btn-xs" onClick={() => handleToggleStatus(g)}>
-        {g.status === 'active' ? 'Блок' : 'Разблок'}
-      </button>
-      <button className="btn btn-danger btn-xs" onClick={() => handleDelete(g.id, g.name)}>✕</button>
-    </div>
-  </div>
-))}
+    )
+    })}
       </div>
     </div>
   )

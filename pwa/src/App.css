@@ -631,3 +631,13 @@ input[type="checkbox"] { width: auto; accent-color: var(--primary); }
 .buttons-grid .relay-btn:last-child:nth-child(odd) {
   grid-column: 1 / -1;
 }
+
+.sa-row.group-grace {
+  background-color: rgba(255, 255, 0, 0.1);
+  border-left: 4px solid #ffc107;
+}
+
+.sa-row.group-blocked {
+  background-color: rgba(255, 0, 0, 0.1);
+  border-left: 4px solid #dc3545;
+}
