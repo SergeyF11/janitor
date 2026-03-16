@@ -215,29 +215,36 @@ async function superadminRoutes(app) {
 
  app.post('/sa/groups', {
   onRequest: [authenticate, isSuperAdmin],
-  schema: {
-    body: {
-      type: 'object', required: ['name', 'mqtt_topic'],
-      properties: {
-        name:       { type: 'string', minLength: 1, maxLength: 100 },
-        mqtt_topic: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[a-z0-9_-]+$' },
-        user_quota: { type: 'integer', minimum: 0, default: 0 },
-        expires_at: { type: 'string', format: 'date-time' },
+    schema: {
+      body: {
+        type: 'object', required: ['name', 'mqtt_topic'],
+        properties: {
+          name:       { type: 'string', minLength: 1, maxLength: 100 },
+          mqtt_topic: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[a-z0-9_-]+$' },
+          user_quota: { type: 'integer', minimum: 0, default: 0 },
+          expires_at: { type: 'string', format: 'date-time' },
+        }
       }
     }
-  }
-}, async (req, reply) => {
-  const db = getDb()
-  const { name, mqtt_topic, user_quota = 0, expires_at } = req.body
+  }, async (req, reply) => {
+    const db = getDb()
+    const { name, mqtt_topic, user_quota = 0, expires_at } = req.body
 
-  const [taken] = await db`SELECT id FROM groups WHERE mqtt_topic = ${mqtt_topic}`
-  if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
+    const [taken] = await db`SELECT id FROM groups WHERE mqtt_topic = ${mqtt_topic}`
+    if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
 
-  const [group] = await db`
-    INSERT INTO groups (name, mqtt_topic, user_quota, expires_at, created_by)
-    VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expires_at || null}, ${req.user.id})
-    RETURNING *
-  `
+    // Вычисляем grace_until = expires_at + 1 месяц (30 дней)
+    let grace_until = null
+    if (expires_at) {
+      const expiresDate = new Date(expires_at)
+      grace_until = new Date(expiresDate.getTime() + 30 * 24 * 60 * 60 * 1000)
+    }
+
+    const [group] = await db`
+      INSERT INTO groups (name, mqtt_topic, user_quota, expires_at, grace_until, created_by)
+      VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expires_at || null}, ${grace_until}, ${req.user.id})
+      RETURNING *
+    `
 
   // Авто-создать администратора группы
   const adminLogin    = 'admin' //mqtt_topic  // или можно использовать mqtt_topic как логин
@@ -274,31 +281,43 @@ async function superadminRoutes(app) {
   })
 })
 
-  app.patch('/sa/groups/:id', {
-    onRequest: [authenticate, isSuperAdmin],
-    schema: {
-      body: {
-        type: 'object',
-        properties: {
-          name:        { type: 'string', minLength: 1, maxLength: 100 },
-          user_quota:  { type: 'integer', minimum: 0 },
-          status:      { type: 'string', enum: ['active', 'blocked'] },
-          expires_at:  { type: 'string', format: 'date-time' },
-          grace_until: { type: 'string', format: 'date-time' },
-        }
+app.patch('/sa/groups/:id', {
+  onRequest: [authenticate, isSuperAdmin],
+  schema: {
+    body: {
+      type: 'object',
+      properties: {
+        name:        { type: 'string', minLength: 1, maxLength: 100 },
+        user_quota:  { type: 'integer', minimum: 0 },
+        status:      { type: 'string', enum: ['active', 'blocked'] },
+        expires_at:  { type: 'string', format: 'date-time' },
       }
     }
-  }, async (req, reply) => {
-    const db = getDb()
-    const id = req.params.id
-    const { name, user_quota, status, expires_at, grace_until } = req.body
-    if (name        !== undefined) await db`UPDATE groups SET name = ${name}, updated_at = NOW() WHERE id = ${id}`
-    if (user_quota  !== undefined) await db`UPDATE groups SET user_quota = ${user_quota}, updated_at = NOW() WHERE id = ${id}`
-    if (status      !== undefined) await db`UPDATE groups SET status = ${status}, updated_at = NOW() WHERE id = ${id}`
-    if (expires_at  !== undefined) await db`UPDATE groups SET expires_at = ${expires_at}, updated_at = NOW() WHERE id = ${id}`
-    if (grace_until !== undefined) await db`UPDATE groups SET grace_until = ${grace_until}, updated_at = NOW() WHERE id = ${id}`
-    return { ok: true }
-  })
+  }
+}, async (req, reply) => {
+  const db = getDb()
+  const id = req.params.id
+  const { name, user_quota, status, expires_at } = req.body
+
+  if (name        !== undefined) await db`UPDATE groups SET name = ${name}, updated_at = NOW() WHERE id = ${id}`
+  if (user_quota  !== undefined) await db`UPDATE groups SET user_quota = ${user_quota}, updated_at = NOW() WHERE id = ${id}`
+  if (status      !== undefined) await db`UPDATE groups SET status = ${status}, updated_at = NOW() WHERE id = ${id}`
+  
+  if (expires_at !== undefined) {
+    let grace_until = null
+    if (expires_at) {
+      const expiresDate = new Date(expires_at)
+      grace_until = new Date(expiresDate.getTime() + 30 * 24 * 60 * 60 * 1000)
+    }
+    await db`
+      UPDATE groups 
+      SET expires_at = ${expires_at}, grace_until = ${grace_until}, updated_at = NOW() 
+      WHERE id = ${id}
+    `
+  }
+
+  return { ok: true }
+})
 
   app.delete('/sa/groups/:id', { onRequest: [authenticate, isSuperAdmin] }, async (req, reply) => {
     const db = getDb()

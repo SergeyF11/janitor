@@ -51,7 +51,8 @@ async function userRoutes(app) {
     const [relay] = await db`
       SELECT r.id, r.name, r.duration_ms, r.device_id, r.last_state,
              d.mqtt_user, COALESCE(d.is_online, false) AS is_online,
-             g.id AS group_id, g.status AS group_status
+             g.id AS group_id, g.status AS group_status,
+             g.expires_at, g.grace_until
       FROM relays r
       JOIN devices d ON d.device_id = r.device_id
       JOIN groups  g ON g.id = d.group_id

@@ -101,7 +101,8 @@ async function adminRoutes(app) {
     const db = getDb()
     const [relay] = await db`
       SELECT r.id, r.name, r.duration_ms, r.device_id, r.last_state,
-             d.mqtt_user, d.group_id, d.is_online
+          d.mqtt_user, d.group_id, d.is_online,
+          g.expires_at, g.grace_until
       FROM relays r
       JOIN devices d ON d.device_id = r.device_id
       WHERE r.id = ${req.params.relayId}
