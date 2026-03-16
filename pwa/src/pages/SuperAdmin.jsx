@@ -73,7 +73,7 @@ export default function SuperAdmin({ user, onLogout }) {
         <div className="sa-creds-modal">
           <div className="sa-creds-box">
             <div className="sa-creds-title">✅ Группа создана. Данные администратора:</div>
-            <div className="sa-creds-row"><b>Логин:</b> <code>{pendingCreds.login}@{pendingCreds.login}</code></div>
+            <div className="sa-creds-row"><b>Логин:</b> <code>{pendingCreds.login}@{pendingCreds.mqtt_topic}</code></div>
             <div className="sa-creds-row"><b>Пароль:</b> <code>{pendingCreds.password}</code></div>
             <div className="sa-creds-hint">Сохраните пароль — он больше не будет показан.</div>
             <button className="btn btn-primary" onClick={() => setPendingCreds(null)}>Понятно</button>

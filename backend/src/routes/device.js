@@ -77,19 +77,26 @@ function ycGet(host, path) {
   })
 }
 
-function ycDelete(host, path) {
-  return new Promise(async (resolve, reject) => {
-    const token   = await getIamToken()
+function ycDelete(host, path, token) {
+  return new Promise((resolve, reject) => {
     const headers = { 'Authorization': `Bearer ${token}` }
     const req = https.request({ hostname: host, path, method: 'DELETE', headers }, (res) => {
       let data = ''
-      res.on('data', c => data += c)
-      res.on('end', () => { resolve(data) })
+      res.on('data', chunk => data += chunk)
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(data)
+        } else {
+          reject(new Error(`YC DELETE failed: ${res.statusCode} ${data}`))
+        }
+      })
     })
     req.on('error', reject)
     req.end()
   })
 }
+
+
 async function createYcDevice(deviceName, password) {
   const registryId = process.env.YC_REGISTRY_ID
   const token      = await getIamToken()
@@ -117,14 +124,20 @@ async function createYcDevice(deviceName, password) {
     if (pwds.passwords && pwds.passwords.length > 0) {
       console.log(`[YC] Удаляем старые пароли (${pwds.passwords.length}) для ${deviceName}`)
       for (const p of pwds.passwords) {
-        // Внимание: путь для удаления пароля /devices/passwords/{id}
-        await ycDelete('iot-devices.api.cloud.yandex.net',
-          `/iot-devices/v1/devices/passwords/${p.id}`, token)
+        try {
+           await ycDelete('iot-devices.api.cloud.yandex.net',
+            `/iot-devices/v1/devices/${ycDeviceId}/passwords/${p.id}`, token)
+          
+          console.log(`[YC] Успешно удалён пароль ${p.id}`)
+        } catch (err) {
+          console.error(`[YC] Ошибка удаления пароля ${p.id}: ${err.message}`)
+          // Не прерываем, продолжаем регистрацию
+        }
       }
     }
   } catch (err) {
-    console.warn(`[YC] Не удалось очистить старые пароли: ${err.message}`)
-    // Не прерываем выполнение, пробуем создать пароль дальше
+    console.warn(`[YC] Не удалось получить список паролей: ${err.message}`)
+    // Продолжаем, возможно, паролей нет или проблема с токеном
   }
   // ---------------------------------------------------------------------------------
 
