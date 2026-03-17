@@ -231,14 +231,15 @@ public:
 
     JsonDocument doc;
     doc["device"] = cfg()->mqtt_user;  // YC device ID
-    JsonArray arr = doc.to<JsonArray>();
+    doc["ts"]     = (uint32_t)time(nullptr);
+    JsonArray arr = doc.createNestedArray("relays");
     for (uint8_t i = 0; i < Relays.getCount(); i++) {
       if (!(changedMask & (1 << i))) continue;
       uint8_t cfgIdx = Relays.getCfgIndex(i);
       JsonObject r = arr.createNestedObject();
       r["name"]  = cfg()->relays[cfgIdx].name;
       r["state"] = Relays.getState(i) ? "on" : "off";
-      r["ts"]    = (uint32_t)time(nullptr);
+      //r["ts"]    = (uint32_t)time(nullptr);
     }
 
     char topic[80];

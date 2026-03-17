@@ -50,28 +50,116 @@ async function connect() {
   return client
 }
 
+// async function handleMessage(topic, payload) {
+//   console.log(`[mqtt] handleMessage entered: topic=${topic}, payload=${payload}`);
+  
+//   const db = getDb()
+//   const eventsMatch = topic.match(/^\$registries\/([^/]+)\/events/)
+//   if (!eventsMatch) return
+//   let data
+//   try { data = JSON.parse(payload) } catch { return }
+//   const ycDeviceId = data.device
+//   if (!ycDeviceId) return
+//   const [dev] = await db`SELECT device_id FROM devices WHERE mqtt_user = ${ycDeviceId}`
+//   if (!dev) return
+//   const deviceId = dev.device_id
+//   console.log(`[mqtt] message from device ${deviceId}:`, data)
+
+//   try { data = JSON.parse(payload) } catch { return }
+
+//   // ── offline: {online: false} или LWT ──
+//   if (data.online === false) {
+//     await db`UPDATE devices SET is_online = false WHERE device_id = ${deviceId}`
+//     broadcastDeviceStatus(deviceId, false)
+//     return
+//   }
+
+//   // ── online: {online: true, fw, relays: [{name, state}]} ──
+//   if (data.online === true) {
+//     await db`
+//       UPDATE devices
+//       SET is_online  = true,
+//           last_seen  = NOW(),
+//           fw_version = COALESCE(${data.fw || null}, fw_version)
+//       WHERE device_id = ${deviceId}
+//     `
+//     broadcastDeviceStatus(deviceId, true)
+
+//     if (Array.isArray(data.relays)) {
+//       for (const r of data.relays) {
+//         // Обновить last_state в relays по имени
+//         const [relay] = await db`
+//           UPDATE relays SET last_state = ${r.state}, last_state_at = NOW()
+//           WHERE device_id = ${deviceId} AND name = ${r.name}
+//           RETURNING id
+//         `
+//         if (relay) {
+//           console.log(`[mqtt] updated relay ${relay.id} (name=${r.name}) to state ${r.state}`)
+//           broadcastRelayStatus(relay.id, r.state)
+//         } else {
+//           console.log(`[mqtt] relay not found for device ${deviceId} with name ${r.name}`)
+//         }
+//       }
+//     }
+//     return
+//   }
+
+//   // ── изменение реле: [{name, state, ts}, ...] ──
+//   if (Array.isArray(data)) {
+//     await db`UPDATE devices SET last_seen = NOW() WHERE device_id = ${deviceId}`
+//     for (const r of data) {
+//       const [relay] = await db`
+//         UPDATE relays SET last_state = ${r.state}, last_state_at = NOW()
+//         WHERE device_id = ${deviceId} AND name = ${r.name}
+//         RETURNING id
+//       `
+//       if (relay) {
+//         console.log(`[mqtt] updated relay ${relay.id} (name=${r.name}) to state ${r.state}`)
+//         broadcastRelayStatus(relay.id, r.state)
+//       } else {
+//         console.log(`[mqtt] relay not found for device ${deviceId} with name ${r.name}`)
+//       }
+//     }
+//   }
+// }
+
 async function handleMessage(topic, payload) {
   const db = getDb()
-  const eventsMatch = topic.match(/^\$registries\/([^/]+)\/events/)
-  if (!eventsMatch) return
-  let data
-  try { data = JSON.parse(payload) } catch { return }
-  const ycDeviceId = data.device
-  if (!ycDeviceId) return
-  const [dev] = await db`SELECT device_id FROM devices WHERE mqtt_user = ${ycDeviceId}`
-  if (!dev) return
-  const deviceId = dev.device_id
-  try { data = JSON.parse(payload) } catch { return }
+  console.log(`[mqtt] handleMessage: topic=${topic}, payload=${payload}`)
 
-  // ── offline: {online: false} или LWT ──
+  let data
+  try {
+    data = JSON.parse(payload)
+  } catch (e) {
+    console.error('[mqtt] JSON parse error:', e.message)
+    return
+  }
+
+  const ycDeviceId = data.device
+  if (!ycDeviceId) {
+    console.log('[mqtt] no device field')
+    return
+  }
+
+  const [dev] = await db`SELECT device_id FROM devices WHERE mqtt_user = ${ycDeviceId}`
+  if (!dev) {
+    console.log(`[mqtt] device not found for mqtt_user=${ycDeviceId}`)
+    return
+  }
+  const deviceId = dev.device_id
+  console.log(`[mqtt] message from device ${deviceId}:`, JSON.stringify(data))
+
+  // Offline
   if (data.online === false) {
+    console.log(`[mqtt] device ${deviceId} went offline`)
     await db`UPDATE devices SET is_online = false WHERE device_id = ${deviceId}`
     broadcastDeviceStatus(deviceId, false)
     return
   }
 
-  // ── online: {online: true, fw, relays: [{name, state}]} ──
+  // Online
   if (data.online === true) {
+    console.log(`[mqtt] device ${deviceId} online, fw=${data.fw}`)
     await db`
       UPDATE devices
       SET is_online  = true,
@@ -80,33 +168,33 @@ async function handleMessage(topic, payload) {
       WHERE device_id = ${deviceId}
     `
     broadcastDeviceStatus(deviceId, true)
-
-    if (Array.isArray(data.relays)) {
-      for (const r of data.relays) {
-        // Обновить last_state в relays по имени
-        const [relay] = await db`
-          UPDATE relays SET last_state = ${r.state}, last_state_at = NOW()
-          WHERE device_id = ${deviceId} AND name = ${r.name}
-          RETURNING id
-        `
-        if (relay) broadcastRelayStatus(relay.id, r.state)
-      }
-    }
-    return
   }
 
-  // ── изменение реле: [{name, state, ts}, ...] ──
-  if (Array.isArray(data)) {
-    await db`UPDATE devices SET last_seen = NOW() WHERE device_id = ${deviceId}`
-    for (const r of data) {
+  // Обновление реле (если есть поле relays)
+  if (data.relays && Array.isArray(data.relays)) {
+    console.log(`[mqtt] processing relays, count=${data.relays.length}`)
+    // Если это не онлайн-сообщение, всё равно обновляем last_seen
+    if (!data.online) {
+      await db`UPDATE devices SET last_seen = NOW() WHERE device_id = ${deviceId}`
+    }
+
+    for (const r of data.relays) {
+      console.log(`[mqtt] updating relay name=${r.name}, state=${r.state}`)
       const [relay] = await db`
         UPDATE relays SET last_state = ${r.state}, last_state_at = NOW()
         WHERE device_id = ${deviceId} AND name = ${r.name}
         RETURNING id
       `
-      if (relay) broadcastRelayStatus(relay.id, r.state)
+      if (relay) {
+        console.log(`[mqtt] updated relay ${relay.id} to ${r.state}`)
+        broadcastRelayStatus(relay.id, r.state)
+      } else {
+        console.log(`[mqtt] relay not found: name="${r.name}"`)
+      }
     }
   }
+
+  // Если не было ни online, ни relays – игнорируем
 }
 
 let _broadcastRelayStatus  = () => {}

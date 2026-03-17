@@ -95,16 +95,17 @@ async function adminRoutes(app) {
     return { ok: true }
   })
 
-  app.post('/admin/relays/:relayId/trigger', {
+app.post('/admin/relays/:relayId/trigger', {
     onRequest: [authenticate]
   }, async (req, reply) => {
     const db = getDb()
     const [relay] = await db`
       SELECT r.id, r.name, r.duration_ms, r.device_id, r.last_state,
-          d.mqtt_user, d.group_id, d.is_online,
-          g.expires_at, g.grace_until
+             d.mqtt_user, d.group_id, d.is_online,
+             g.status, g.expires_at, g.grace_until
       FROM relays r
       JOIN devices d ON d.device_id = r.device_id
+      JOIN groups g ON g.id = d.group_id
       WHERE r.id = ${req.params.relayId}
     `
     if (!relay) return reply.code(404).send({ error: 'not_found' })
@@ -115,22 +116,19 @@ async function adminRoutes(app) {
     }
 
     // Проверка: группа заблокирована или истёк льготный период
-    const [grp] = await db`SELECT status, expires_at, grace_until FROM groups WHERE id = ${relay.group_id}`
-    if (grp) {
-      const now        = new Date()
-      const graceUntil = grp.grace_until ? new Date(grp.grace_until) : null
-      const expiresAt  = grp.expires_at  ? new Date(grp.expires_at)  : null
-      const blocked    = grp.status === 'blocked'
-        || (expiresAt && expiresAt < now && (!graceUntil || graceUntil < now))
-      if (blocked) {
-        await db`
-          INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload, ip)
-          VALUES ('relay_trigger_blocked', ${req.user.id}, ${req.user.login},
-                  ${relay.group_id}, ${relay.id},
-                  ${{ relay: relay.name, reason: 'group_blocked', by: 'admin' }}, ${req.ip})
-        `
-        return reply.code(403).send({ error: 'group_blocked' })
-      }
+    const now = new Date()
+    const graceUntil = relay.grace_until ? new Date(relay.grace_until) : null
+    const expiresAt  = relay.expires_at  ? new Date(relay.expires_at)  : null
+    const blocked = relay.status === 'blocked'
+      || (expiresAt && expiresAt < now && (!graceUntil || graceUntil < now))
+    if (blocked) {
+      await db`
+        INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload, ip)
+        VALUES ('relay_trigger_blocked', ${req.user.id}, ${req.user.login},
+                ${relay.group_id}, ${relay.id},
+                ${{ relay: relay.name, reason: 'group_blocked', by: 'admin' }}, ${req.ip})
+      `
+      return reply.code(403).send({ error: 'group_blocked' })
     }
 
     if (!relay.is_online) return reply.code(503).send({ error: 'device_offline' })
@@ -144,6 +142,8 @@ async function adminRoutes(app) {
       action   = 'pulse'
     }
 
+    console.log(`[admin] relay ${relay.id} last_state=${relay.last_state}, newState=${newState}`);
+    
     const cmd   = { relay: relay.name, action, ...(action === 'pulse' ? { duration: relay.duration_ms } : {}) }
     const topic = `$devices/${relay.mqtt_user}/commands`
 
