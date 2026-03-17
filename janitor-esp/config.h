@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define FW_VERSION        "1.3.0"
+#define FW_VERSION        "1.3.1"
 #define DEVICE_PREFIX     "JANITOR"
 
 #define AP_SSID_PREFIX    "Janitor-"
@@ -69,6 +69,7 @@ struct DeviceConfig {
   char     registry_id[32]; // YC registry ID — для публикации событий
 
   // Код привязки устройства
+  char     server_host[64];
   char     reg_code[7];
 
   bool     registered;

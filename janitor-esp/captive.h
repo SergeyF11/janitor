@@ -6,6 +6,7 @@
 #include "storage.h"
 #include "led.h"
 #include "autoTime.h"
+#include "css.h"
 
 #ifdef ESP32
   #include <WiFi.h>
@@ -97,6 +98,26 @@ private:
   void _buildPage() {
     GP.BUILD_BEGIN(GP_DARK);
     GP.THEME(GP_DARK);
+
+    // Кастомный стиль для кнопок — тёмно-синий
+    GP.SEND(CSS::_portal);
+    // GP.SEND(F(
+    //   "<style>"
+    //   "input[type='submit'] {"
+    //   "  background-color: #0a2f5a;"   /* тёмно-синий */
+    //   "  color: white;"
+    //   "  border: none;"
+    //   "  padding: 8px 16px;"
+    //   "  border-radius: 6px;"
+    //   "  cursor: pointer;"
+    //   "  font-weight: bold;"
+    //   "}"
+    //   "input[type='submit']:hover {"
+    //   "  background-color: #1a4a7a;"   /* чуть светлее при наведении */
+    //   "}"
+    //   "</style>"
+    // ));
+
     GP.PAGE_TITLE("Привратник");
 
     GP.SEND(FPSTR(AutoTime::SCRIPT));
@@ -190,6 +211,10 @@ private:
       // Форма ввода кода (один код на всё устройство)
       if (!_cfg->isRegistered()) {
         GP.FORM_BEGIN("/save_code");
+
+        GP.LABEL("Введите имя сервера приложения");
+        GP.TEXT("server_host", "Имя сервера", _cfg->server_host);
+
         GP.LABEL("Введите 6-значный код из панели администратора:");
         GP.TEXT("code", "Код привязки", _cfg->reg_code);
         GP.SUBMIT(_cfg->hasPendingCode()
@@ -241,7 +266,9 @@ private:
       GP.LABEL("AP SSID: "  + _apSSID);
       GP.LABEL("Heap: "     + String(ESP.getFreeHeap()) + " байт");
       GP.LABEL("Реле: "     + String(_cfg->relayCount()));
-      GP.LABEL("Привязан: " + String(_cfg->isRegistered() ? "Да" : "Нет"));
+      // String _registred; _registred.reserve(64);
+      // if ( _cfg->registered ) _registred = 
+      GP.LABEL("Привязан: " + String(_cfg->isRegistered() ? _cfg->server_host : "Нет"));
       if (_cfg->isRegistered()) {
         GP.LABEL("Сервер: " + String(_cfg->mqtt_host));
         GP.LABEL("MQTT user: "  + String(_cfg->mqtt_user));
@@ -251,14 +278,29 @@ private:
       GP.SEND(FPSTR(EspTime::SCRIPT));
       GP.HR();
       GP.FORM_BEGIN("/reset_all");
-      GP.SUBMIT("⚠️ Сбросить все настройки");
+      GP.SUBMIT("⚠️ Сбросить настройки");
       GP.FORM_END();
       GP.HR();
       GP.FORM_BEGIN("/close");
-      GP.SUBMIT("✅ Завершить настройку");
+      GP.SUBMIT("✅ Завершить");
       GP.FORM_END();
+
+      GP.HR();
+      GP.TITLE("🔄 Обновление прошивки");
+      //GP.LABEL("Текущая версия: " + String(FW_VERSION));
+      GP.OTA_FIRMWARE("Выбрать", "#0a2f5a");
+      GP.HR();
+
       GP.BLOCK_END();
-    }
+    } 
+    // else if (uri == "/ota") {
+    //   GP.BLOCK_BEGIN();
+    //   GP.TITLE("🔄 Обновление прошивки");
+    //   GP.LABEL("Текущая версия: " + String(FW_VERSION));
+    //   GP.HR();
+    //   GP.OTA_FORM();  // встроенная форма
+    //   GP.BLOCK_END();
+    //}
 
     GP.BUILD_END();
   }
@@ -297,6 +339,10 @@ private:
     }
 
     if (_portal.form("/save_code")) {
+      
+      // Сохраняем сервер
+      _portal.copyStr("server_host", _cfg->server_host, sizeof(_cfg->server_host));
+
       String code = _portal.getString("code");
       code.trim();
       if (code.length() == 6) {

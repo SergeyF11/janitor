@@ -83,6 +83,10 @@ void setup() {
   }
 
   Storage.loadConfig(cfg);
+  if (strlen(cfg.server_host) == 0) {
+    strlcpy(cfg.server_host, SERVER_HOST, sizeof(cfg.server_host));
+  }
+
   Serial.print("Config: "); cfg.printTo(Serial);
   Relays.begin(cfg);
 
