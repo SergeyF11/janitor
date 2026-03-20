@@ -42,7 +42,14 @@
 // registry_id — заполняется при регистрации из ответа сервера
 // mqtt_user   — YC device ID, используется для команд
 #define DEVICE_CMD_TMPL    "$devices/%s/commands"      // ← команды: %s = mqtt_user (YC device ID)
-#define DEVICE_EVENTS_TMPL "$registries/%s/events"     // → события:  %s = registry_id
+#define DEVICE_EVENTS_TMPL "$devices/%s/events" 
+#define DEVICE_STATUS_TMPL DEVICE_EVENTS_TMPL 
+//#define DEVICE_STATUS_TMPL "$devices/%s/status" 
+//#define DEVICE_EVENTS_TMPL DEVICE_STATUS_TMPL
+
+//const char DEVICE_TMPL[] PROGMEM = "$devices/%s/%s";
+
+//#define REGITRIES_EVENTS_TMPL "$registries/%s/events"     // → события:  %s = registry_id
 
 // ── Реле ──────────────────────────────────────────────────────
 struct RelayConfig {

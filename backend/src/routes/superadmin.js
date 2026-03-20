@@ -513,7 +513,9 @@ app.get('/sa/users', {
         (SELECT COUNT(*) FROM devices)                                                as total_devices,
         (SELECT COUNT(*) FROM devices WHERE is_online = true)                         as online_devices,
         (SELECT COUNT(*) FROM refresh_tokens WHERE expires_at > NOW())                as active_sessions,
-        (SELECT COUNT(*) FROM event_log WHERE ts > NOW() - INTERVAL '24 hours')       as events_24h
+        (SELECT COUNT(*) FROM event_log WHERE ts > NOW() - INTERVAL '24 hours')       as events_24h,
+        (SELECT COUNT(*) FROM event_log
+            WHERE action = 'login' AND ts > NOW() - INTERVAL '24 hours')              as logins_24h
     `
     return stats
   })

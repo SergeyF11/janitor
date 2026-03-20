@@ -101,54 +101,79 @@ async function createYcDevice(deviceName, password) {
   const registryId = process.env.YC_REGISTRY_ID
   const token      = await getIamToken()
 
+  // 1. Проверить, существует ли устройство с таким именем
+  console.log(`[YC] Looking up device by name: ${deviceName}`)
+  const list = await ycGet('iot-devices.api.cloud.yandex.net',
+    `/iot-devices/v1/devices?registryId=${registryId}`, token)
+  let existing = (list.devices || []).find(d => d.name === deviceName)
   let ycDeviceId
-  try {
-    // 1. Пробуем создать устройство
-    const device = await ycPost('iot-devices.api.cloud.yandex.net',
-      '/iot-devices/v1/devices', { registryId, name: deviceName }, token)
-    ycDeviceId = device.id || device.response?.id
-  } catch (e) {
-    // 2. Если устройство уже есть, находим его ID
-    const list = await ycGet('iot-devices.api.cloud.yandex.net',
-      `/iot-devices/v1/devices?registryId=${registryId}`, token) // Добавил token
-    const existing = (list.devices || []).find(d => d.name === deviceName)
-    if (!existing) throw new Error('Failed to create or find YC device: ' + e.message)
+
+  if (existing) {
+    // Устройство уже есть
     ycDeviceId = existing.id
+    console.log(`[YC] Found existing device, ID: ${ycDeviceId}`)
+  } else {
+    // Устройства нет — создаём
+    console.log(`[YC] Creating new device with name: ${deviceName}`)
+    try {
+      const device = await ycPost('iot-devices.api.cloud.yandex.net',
+        '/iot-devices/v1/devices', { registryId, name: deviceName }, token)
+      ycDeviceId = device.id || device.response?.id
+      console.log(`[YC] Created device, initial ID: ${ycDeviceId}`)
+    } catch (e) {
+      console.error(`[YC] Create failed: ${e.message}`)
+      throw new Error(`Failed to create YC device: ${e.message}`)
+    }
+
+    // 2. Ждём 1 секунду для согласованности
+    console.log(`[YC] Waiting 1 second for consistency...`)
+    await new Promise(resolve => setTimeout(resolve, 1000))
+
+    // 3. Повторно ищем устройство по имени, чтобы получить актуальный ID
+    console.log(`[YC] Looking up device by name again to confirm ID...`)
+    const list2 = await ycGet('iot-devices.api.cloud.yandex.net',
+      `/iot-devices/v1/devices?registryId=${registryId}`, token)
+    const found = (list2.devices || []).find(d => d.name === deviceName)
+    if (!found) {
+      throw new Error(`Device ${deviceName} not found after creation`)
+    }
+    if (found.id !== ycDeviceId) {
+      console.log(`[YC] ID changed from ${ycDeviceId} to ${found.id}, using new ID`)
+      ycDeviceId = found.id
+    } else {
+      console.log(`[YC] ID confirmed: ${ycDeviceId}`)
+    }
   }
 
-  // --- БЛОК ОЧИСТКИ (теперь он выполняется ВСЕГДА перед добавлением нового пароля) ---
+  // 4. Удаляем старые пароли (если есть)
   try {
     const pwds = await ycGet('iot-devices.api.cloud.yandex.net',
       `/iot-devices/v1/devices/${ycDeviceId}/passwords`, token)
     
     if (pwds.passwords && pwds.passwords.length > 0) {
-      console.log(`[YC] Удаляем старые пароли (${pwds.passwords.length}) для ${deviceName}`)
+      console.log(`[YC] Deleting ${pwds.passwords.length} old passwords for ${deviceName}`)
       for (const p of pwds.passwords) {
         try {
-           await ycDelete('iot-devices.api.cloud.yandex.net',
+          await ycDelete('iot-devices.api.cloud.yandex.net',
             `/iot-devices/v1/devices/${ycDeviceId}/passwords/${p.id}`, token)
-          
-          console.log(`[YC] Успешно удалён пароль ${p.id}`)
+          console.log(`[YC] Deleted password ${p.id}`)
         } catch (err) {
-          console.error(`[YC] Ошибка удаления пароля ${p.id}: ${err.message}`)
-          // Не прерываем, продолжаем регистрацию
+          console.error(`[YC] Failed to delete password ${p.id}: ${err.message}`)
         }
       }
     }
   } catch (err) {
-    console.warn(`[YC] Не удалось получить список паролей: ${err.message}`)
-    // Продолжаем, возможно, паролей нет или проблема с токеном
+    console.warn(`[YC] Failed to get password list: ${err.message}`)
   }
-  // ---------------------------------------------------------------------------------
 
-  // 3. Создаем новый пароль (теперь место точно есть)
+  // 5. Создаем новый пароль
+  console.log(`[YC] Creating new password for ${ycDeviceId}`)
   await ycPost('iot-devices.api.cloud.yandex.net',
     `/iot-devices/v1/devices/${ycDeviceId}/passwords`,
     { deviceId: ycDeviceId, password }, token)
 
   return ycDeviceId
 }
-
 
 // async function createYcDevice(deviceName, password) {
 //   const registryId = process.env.YC_REGISTRY_ID

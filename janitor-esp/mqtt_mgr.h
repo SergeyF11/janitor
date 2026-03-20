@@ -1,4 +1,6 @@
 #pragma once
+#define MQTT_MAX_PACKET_SIZE 1024
+
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "config.h"
@@ -29,7 +31,7 @@ public:
     _mqtt.setCallback([](char* t, byte* p, unsigned int l) {
       if (_instance) _instance->_onMessage(t, p, l);
     });
-    _mqtt.setKeepAlive(60);
+    _mqtt.setKeepAlive(3600);
     _mqtt.setSocketTimeout(10);
     _mqtt.setBufferSize(512);
     return true;
@@ -126,28 +128,28 @@ public:
     Led.setMode(LedManager::CONNECTING);
 
     // clientId = JANITOR_{MAC без двоеточий} — однозначно идентифицирует устройство
-    String mac = WiFi.macAddress();
-    mac.replace(":", "");
-    mac.toUpperCase();
-    String clientId = String(DEVICE_PREFIX) + "_" + mac;
+    String macId = WiFi.macAddress();
+    macId.replace(":", "");
+    macId.toUpperCase();
+    //String clientId = String(DEVICE_PREFIX) + "_" + mac;
+    auto clientId = cfg()->mqtt_user;
 
-    // LWT в топик событий реестра
-    char lwtTopic[80];
-    snprintf(lwtTopic, sizeof(lwtTopic), DEVICE_EVENTS_TMPL, cfg()->registry_id);
+    // LWT в топик событий устройства
+    char lwtTopic[128];
+    snprintf(lwtTopic, sizeof(lwtTopic), DEVICE_STATUS_TMPL, cfg()->mqtt_user); //DEVICE_TMPL, , "events");
 
-    char lwtPayload[64];
-    snprintf(lwtPayload, sizeof(lwtPayload),
-      "{\"online\":false,\"ts\":%lu}", (unsigned long)time(nullptr));
+    char lwtPayload[128];
+    snprintf(lwtPayload, sizeof(lwtPayload), "{\"online\":false}" );
 
-    Serial.printf("[MQTT] Connecting as %s to %s:%u...\n",
-      clientId.c_str(), cfg()->mqtt_host, cfg()->mqtt_port);
+    Serial.printf("[MQTT] Connecting %s as %s to %s:%u...\n", macId.c_str(),
+       clientId, cfg()->mqtt_host, cfg()->mqtt_port);
 
     bool ok = _mqtt.connect(
-      clientId.c_str(),
+      clientId,
       cfg()->mqtt_user,
       cfg()->mqtt_pass,
-      lwtTopic, 1, false,
-      lwtPayload
+      lwtTopic, 1, true,
+      lwtPayload, true
     );
 
     if (!ok) {
@@ -157,6 +159,8 @@ public:
     }
 
     Serial.println(F("[MQTT] Connected!"));
+    Serial.printf("[LWT] %s to %s\n", lwtPayload, lwtTopic);
+
     Led.setMode(LedManager::RUNNING);
 
     // Подписка на команды устройства
@@ -206,7 +210,7 @@ public:
     if (!isConnected() || !cfg()->isRegistered()) return;
 
     JsonDocument doc;
-    doc["device"] = cfg()->mqtt_user;  // YC device ID
+    //doc["device"] = cfg()->mqtt_user;  // YC device ID
     doc["online"] = true;
     doc["fw"]     = FW_VERSION;
     doc["ts"]     = (uint32_t)time(nullptr);
@@ -219,7 +223,8 @@ public:
     }
 
     char topic[80];
-    snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->registry_id);
+    //snprintf(topic, sizeof(topic), REGITRIES_EVENTS_TMPL, cfg()->registry_id);
+    snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->mqtt_user);
     String payload; serializeJson(doc, payload);
     _mqtt.publish(topic, payload.c_str(), false);
     Serial.printf("[MQTT] → online: %s\n", payload.c_str());
@@ -230,7 +235,7 @@ public:
     if (!isConnected() || !cfg()->isRegistered() || !changedMask) return;
 
     JsonDocument doc;
-    doc["device"] = cfg()->mqtt_user;  // YC device ID
+    //doc["device"] = cfg()->mqtt_user;  // YC device ID
     doc["ts"]     = (uint32_t)time(nullptr);
     JsonArray arr = doc.createNestedArray("relays");
     for (uint8_t i = 0; i < Relays.getCount(); i++) {
@@ -243,7 +248,8 @@ public:
     }
 
     char topic[80];
-    snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->registry_id);
+    //snprintf(topic, sizeof(topic), REGITRIES_EVENTS_TMPL, cfg()->registry_id);
+    snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->mqtt_user);
     String payload; serializeJson(doc, payload);
     _mqtt.publish(topic, payload.c_str(), false);
     Serial.printf("[MQTT] → changes: %s\n", payload.c_str());
