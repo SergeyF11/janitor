@@ -74,6 +74,7 @@ struct DeviceConfig {
   char     mqtt_user[64];   // YC device ID — для команд и clientId
   char     mqtt_pass[64];
   char     registry_id[32]; // YC registry ID — для публикации событий
+  char     mqtt_topic[64]; 
 
   // Код привязки устройства
   char     server_host[64];
@@ -96,17 +97,26 @@ struct DeviceConfig {
   bool hasPendingCode() const { return strlen(reg_code) == 6; }
 
   bool isRegistered() const {
-    return registered && strlen(mqtt_host) > 0 &&
-           strlen(mqtt_user) > 0 && strlen(registry_id) > 0;
+    if (!registered || !strlen(mqtt_host) || !strlen(mqtt_user)) return false;
+    // local: нужен mqtt_topic; yandex: нужен registry_id; принимаем любой из двух
+    return strlen(mqtt_topic) > 0 || strlen(registry_id) > 0;
   }
+
+  // true = Яндекс, false = local Mosquitto
+  bool isYandex() const { return strlen(registry_id) > 0; }
 
   void printTo(Stream& s) const {
     s.printf("WiFi: %s\n", wifi1_ssid);
     if (strlen(wifi2_ssid)) s.printf("WiFi2: %s\n", wifi2_ssid);
     s.printf("TZ: %s\n", tz);
     if (isRegistered()) {
-      s.printf("MQTT: %s@%s:%u registry=%s\n",
-        mqtt_user, mqtt_host, mqtt_port, registry_id);
+      if (isYandex()) {
+        s.printf("MQTT: %s@%s:%u registry=%s\n",
+          mqtt_user, mqtt_host, mqtt_port, registry_id);
+      } else {
+        s.printf("MQTT: %s@%s:%u topic=%s\n",
+          mqtt_user, mqtt_host, mqtt_port, mqtt_topic);
+      }
     } else if (hasPendingCode()) {
       s.printf("Pending code: %s\n", reg_code);
     } else {

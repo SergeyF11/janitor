@@ -212,11 +212,12 @@ private:
       if (!_cfg->isRegistered()) {
         GP.FORM_BEGIN("/save_code");
 
-        GP.LABEL("Введите имя сервера приложения");
+        GP.LABEL("Сервер приложения");
         GP.TEXT("server_host", "Имя сервера", _cfg->server_host);
 
-        GP.LABEL("Введите 6-значный код из панели администратора:");
-        GP.TEXT("code", "Код привязки", _cfg->reg_code);
+        GP.LABEL("Код привязки");
+        GP.TEXT("code' inputmode=\"numeric\"", "Введите 6-значный код",
+             _cfg->reg_code, "6", 6, "[0-9]*");
         GP.SUBMIT(_cfg->hasPendingCode()
           ? "✏️ Обновить код (привязка при перезагрузке)"
           : "🔗 Привязать устройство");
@@ -349,7 +350,7 @@ private:
         strlcpy(_cfg->reg_code, code.c_str(), sizeof(_cfg->reg_code));
         _saveTz();
         Storage.saveMainConfig(*_cfg);
-        _statusMsg = F("✅ Код сохранён. Перезагрузите устройство для привязки.");
+        _statusMsg = F("✅ Код сохранён. Перезагрузите устройство.");
         _statusOk  = true;
       } else {
         _statusMsg = F("❌ Код должен содержать 6 цифр");

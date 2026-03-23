@@ -1,18 +1,16 @@
 'use strict'
 // ── Local Mosquitto provider ──────────────────────────────────
-// Регистрация: dynsec через mosquitto_ctrl
+// Регистрация: dynsec через MQTT API ($CONTROL/dynamic-security/v1/request)
 // Соединение:  mqtt:// без TLS (внутри Docker)
 // Online:      LWT — нативно, heartbeat не нужен
 
-const { execSync } = require('child_process')
+const MQTT_HOST = () => process.env.MQTT_LOCAL_HOST     || 'janitor-mosquitto'
+const MQTT_PORT = () => process.env.MQTT_LOCAL_PORT     || '1883'
+const MQTT_USER = () => process.env.MQTT_ADMIN_USER     || 'mqttadmin'
+const MQTT_PASS = () => process.env.MQTT_ADMIN_PASSWORD || ''
 
-const MQTT_HOST = () => process.env.MQTT_HOST     || 'janitor-mosquitto'
-const MQTT_PORT = () => process.env.MQTT_PORT     || '1883'
-const MQTT_USER = () => process.env.MQTT_USER     || 'mqttadmin'
-const MQTT_PASS = () => process.env.MQTT_PASSWORD || ''
-
-const ESP_HOST  = () => process.env.MQTT_ESP_HOST || 'smilart.ru'
-const ESP_PORT  = () => parseInt(process.env.MQTT_ESP_PORT || '8883')
+const ESP_HOST  = () => process.env.MQTT_HOST || 'smilart.ru'
+const ESP_PORT  = () => parseInt(process.env.MQTT_PORT || '8883')
 
 // true — LWT работает нативно, heartbeat fallback не нужен
 const supportsLWT = true
@@ -50,7 +48,6 @@ async function parseMessage(topic, payload, db) {
   const relayMatch = topic.match(/^relay\/([^/]+)\/status$/)
   if (relayMatch) {
     const mqttTopic = relayMatch[1]
-    // Найти устройство по mqtt_topic группы
     const [dev] = await db`
       SELECT d.device_id FROM devices d
       JOIN groups g ON g.id = d.group_id
@@ -59,8 +56,8 @@ async function parseMessage(topic, payload, db) {
     if (!dev) return null
     return {
       deviceId: dev.device_id,
-      online:   null,   // не меняем статус — только реле
-      fw:       null,
+      online:   data.online !== undefined ? data.online !== false : true,
+      fw:       data.fw || null,
       relays:   data.relays || null,
     }
   }
@@ -84,38 +81,101 @@ function getConnectOptions() {
   }
 }
 
-// ── Регистрация устройства в Mosquitto через dynsec ───────────
+// ── Регистрация устройства через dynsec MQTT API ─────────────
 async function registerDevice({ deviceId, mqttUser, mqttPass, mqttTopic }) {
   const roleName = `role_${deviceId}`
-  const base = `mosquitto_ctrl -h ${MQTT_HOST()} -p ${MQTT_PORT()} -u ${MQTT_USER()} -P "${MQTT_PASS()}" dynsec`
 
-  // Шаг 1: удаляем старое (ошибки ожидаемы)
-  for (const cmd of [`deleteClient ${mqttUser}`, `deleteRole ${roleName}`]) {
-    try { execSync(`${base} ${cmd}`, { stdio: 'pipe' }) } catch {}
-  }
+  // Шаг 1: удаляем старое (ошибки "not found" ожидаемы)
+  await _dynsecSend([
+    { command: 'deleteClient', username: mqttUser  },
+    { command: 'deleteRole',   rolename: roleName  },
+  ]).catch(() => {})
 
-  // Шаг 2: создаём пользователя (пароль через stdin)
-  execSync(`${base} createClient ${mqttUser}`, {
-    input: `${mqttPass}\n${mqttPass}\n`,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-
-  // Шаг 3: создаём роль с ACL
-  execSync(`${base} createRole ${roleName}`, { stdio: 'pipe' })
-  execSync(`${base} addRoleACL ${roleName} subscribePattern "relay/${mqttTopic}/cmd" allow`,       { stdio: 'pipe' })
-  execSync(`${base} addRoleACL ${roleName} publishClientSend "relay/${mqttTopic}/status" allow`,   { stdio: 'pipe' })
-  execSync(`${base} addRoleACL ${roleName} publishClientSend "sys/devices/${deviceId}/status" allow`, { stdio: 'pipe' })
-  execSync(`${base} addClientRole ${mqttUser} ${roleName}`, { stdio: 'pipe' })
+  // Шаг 2: создаём пользователя, роль и ACL
+  await _dynsecSend([
+    { command: 'createClient',      username: mqttUser },
+    { command: 'setClientPassword', username: mqttUser, password: mqttPass },
+    { command: 'createRole',    rolename: roleName },
+    { command: 'addRoleACL',    rolename: roleName,
+      acltype: 'subscribePattern',  topic: `relay/${mqttTopic}/cmd`,         allow: true },
+    { command: 'addRoleACL',    rolename: roleName,
+      acltype: 'publishClientSend', topic: `relay/${mqttTopic}/status`,      allow: true },
+    { command: 'addRoleACL',    rolename: roleName,
+      acltype: 'publishClientSend', topic: `sys/devices/${deviceId}/status`, allow: true },
+    { command: 'addClientRole', username: mqttUser, rolename: roleName },
+  ])
 
   console.log(`[local] dynsec OK: user=${mqttUser} topic=relay/${mqttTopic}/cmd`)
+}
+
+// ── Dynsec через отдельное MQTT соединение ───────────────────
+// Используем отдельный клиент чтобы не мешать основному соединению.
+// Подписываемся на wildcard чтобы поймать ответ независимо от subtopic.
+function _dynsecSend(commands) {
+  const mqtt = require('mqtt')
+  return new Promise((resolve, reject) => {
+    const client = mqtt.connect(`mqtt://${MQTT_HOST()}:${MQTT_PORT()}`, {
+      username:           MQTT_USER(),
+      password:           MQTT_PASS(),
+      clientId:           `dynsec_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      clean:              true,
+      connectTimeout:     5000,
+      reconnectPeriod:    0,   // не переподключаться
+    })
+
+    const timer = setTimeout(() => {
+      client.end(true)
+      reject(new Error('dynsec timeout'))
+    }, 8000)
+
+    client.once('connect', () => {
+      // Подписываемся на все ответы dynsec (включая subtopic /request/response)
+      client.subscribe('$CONTROL/dynamic-security/v1/#', { qos: 1 }, () => {
+        client.publish(
+          '$CONTROL/dynamic-security/v1/request',
+          JSON.stringify({ commands }),
+          { qos: 1 }
+        )
+      })
+
+      client.on('message', (topic, payload) => {
+        // Игнорируем echo нашего же запроса
+        if (topic === '$CONTROL/dynamic-security/v1/request') return
+        clearTimeout(timer)
+        client.end()
+        try {
+          const resp = JSON.parse(payload.toString())
+          // "endpoint not available" — retained мусор, игнорируем
+          if (resp.error === 'endpoint not available') {
+            resolve({ responses: [] })
+            return
+          }
+          const errors = (resp.responses || []).filter(r =>
+            r.error &&
+            !r.error.toLowerCase().includes('not found') &&
+            !r.error.toLowerCase().includes('already exists')
+          )
+          if (errors.length > 0) reject(new Error(JSON.stringify(errors)))
+          else resolve(resp)
+        } catch (e) { reject(e) }
+      })
+    })
+
+    client.once('error', err => {
+      clearTimeout(timer)
+      client.end(true)
+      reject(err)
+    })
+  })
 }
 
 // ── Удаление устройства ───────────────────────────────────────
 async function deleteDevice({ mqttUser, deviceId }) {
   const roleName = `role_${deviceId}`
-  const base = `mosquitto_ctrl -h ${MQTT_HOST()} -p ${MQTT_PORT()} -u ${MQTT_USER()} -P "${MQTT_PASS()}" dynsec`
-  try { execSync(`${base} deleteClient ${mqttUser}`, { stdio: 'pipe' }) } catch {}
-  try { execSync(`${base} deleteRole ${roleName}`,   { stdio: 'pipe' }) } catch {}
+  await _dynsecSend([
+    { command: 'deleteClient', username: mqttUser  },
+    { command: 'deleteRole',   rolename: roleName  },
+  ]).catch(() => {})
   console.log(`[local] dynsec deleted: user=${mqttUser}`)
 }
 

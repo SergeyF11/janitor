@@ -29,8 +29,8 @@ async function connect() {
 
   // Heartbeat fallback — только для Яндекса (LWT не работает)
   if (!provider.supportsLWT) {
-    const TIMEOUT = provider.HEARTBEAT_TIMEOUT_MS || 3 * 60 * 1000
-    setInterval(() => checkHeartbeatTimeouts(TIMEOUT), 60 * 1000)
+    const TIMEOUT = provider.HEARTBEAT_TIMEOUT_MS || 3 * 60 * 60 * 1000
+    setInterval(() => checkHeartbeatTimeouts(TIMEOUT), 60 * 60 * 1000)
     console.log(`[mqtt] Heartbeat timeout checker started (${TIMEOUT / 1000}s)`)
   }
 
@@ -128,4 +128,3 @@ function setBroadcasters(relayFn, deviceFn) {
 function getClient() { return client }
 
 module.exports = { connect, getClient, setBroadcasters }
-
