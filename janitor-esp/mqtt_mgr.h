@@ -132,17 +132,13 @@ public:
 
     Led.setMode(LedManager::CONNECTING);
 
-    // LWT топик зависит от провайдера:
-    //   Яндекс: $devices/{user}/events
-    //   local:  sys/devices/{MAC}/status
+    // Для local и Яндекса используем одинаковую device-модель:
+    //   $devices/{user}/commands
+    //   $devices/{user}/events
     char lwtTopic[128];
     String macId = WiFi.macAddress();
     macId.replace(":", ""); macId.toUpperCase();
-    if (cfg()->isYandex()) {
-      snprintf(lwtTopic, sizeof(lwtTopic), DEVICE_EVENTS_TMPL, cfg()->mqtt_user);
-    } else {
-      snprintf(lwtTopic, sizeof(lwtTopic), "sys/devices/%s/status", macId.c_str());
-    }
+    snprintf(lwtTopic, sizeof(lwtTopic), DEVICE_EVENTS_TMPL, cfg()->mqtt_user);
 
     auto clientId = cfg()->mqtt_user;
     char lwtPayload[32];
@@ -170,15 +166,9 @@ public:
 
     Led.setMode(LedManager::RUNNING);
 
-    // Подписка на команды — топик зависит от провайдера:
-    //   Яндекс: $devices/{user}/commands
-    //   local:  relay/{topic}/cmd
+    // Подписка на команды — одинаковая и для local, и для Яндекса.
     char cmdTopic[80];
-    if (cfg()->isYandex()) {
-      snprintf(cmdTopic, sizeof(cmdTopic), DEVICE_CMD_TMPL, cfg()->mqtt_user);
-    } else {
-      snprintf(cmdTopic, sizeof(cmdTopic), "relay/%s/cmd", cfg()->mqtt_topic);
-    }
+    snprintf(cmdTopic, sizeof(cmdTopic), DEVICE_CMD_TMPL, cfg()->mqtt_user);
     _mqtt.subscribe(cmdTopic, 1);
     Serial.printf("[MQTT] Subscribed: %s\n", cmdTopic);
 
@@ -235,13 +225,8 @@ public:
       r["state"] = Relays.getState(i) ? "on" : "off";
     }
 
-    // Яндекс: $devices/{user}/events  |  local: relay/{topic}/status
     char topic[80];
-    if (cfg()->isYandex()) {
-      snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->mqtt_user);
-    } else {
-      snprintf(topic, sizeof(topic), "relay/%s/status", cfg()->mqtt_topic);
-    }
+    snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->mqtt_user);
     String payload; serializeJson(doc, payload);
     _mqtt.publish(topic, payload.c_str(), false);
     Serial.printf("[MQTT] → online: %s\n", payload.c_str());
@@ -264,13 +249,8 @@ public:
       //r["ts"]    = (uint32_t)time(nullptr);
     }
 
-    // Яндекс: $devices/{user}/events  |  local: relay/{topic}/status
     char topic[80];
-    if (cfg()->isYandex()) {
-      snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->mqtt_user);
-    } else {
-      snprintf(topic, sizeof(topic), "relay/%s/status", cfg()->mqtt_topic);
-    }
+    snprintf(topic, sizeof(topic), DEVICE_EVENTS_TMPL, cfg()->mqtt_user);
     String payload; serializeJson(doc, payload);
     _mqtt.publish(topic, payload.c_str(), false);
     Serial.printf("[MQTT] → changes: %s\n", payload.c_str());
