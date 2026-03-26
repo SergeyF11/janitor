@@ -27,14 +27,14 @@ const supportsLWT = true
 // ESP публикует:
 //   $devices/{mqtt_user}/events — {"online":true/false, "fw":"...", "relays":[...]}
 
-// Legacy (обратная совместимость):
-//   sys/devices/{MAC}/status  — {"online":true/false, "fw_version":"..."}  (LWT = {"online":false})
-//   relay/{topic}/status      — {"relays":[{"index":0,"state":"on"}]}
+              // Legacy (обратная совместимость):
+              //   sys/devices/{MAC}/status  — {"online":true/false, "fw_version":"..."}  (LWT = {"online":false})
+              //   relay/{topic}/status      — {"relays":[{"index":0,"state":"on"}]}
 // Backend слушает:
 //   $devices/+/events
 
-//   sys/devices/+/status
-//   relay/+/status
+              //   sys/devices/+/status
+              //   relay/+/status
 
 function topicsToSubscribe() {
   return [
@@ -69,31 +69,31 @@ async function parseMessage(topic, payload, db) {
     }
   }
 
-  // // sys/devices/<MAC>/status
-  // const statusMatch = topic.match(/^sys\/devices\/([^/]+)\/status$/)
-  // if (statusMatch) {
-  //   const deviceId = statusMatch[1]
-  //   const online   = data.online !== false
-  //   return { deviceId, online, fw: data.fw_version || null, relays: null }
-  // }
+  // sys/devices/<MAC>/status
+  const statusMatch = topic.match(/^sys\/devices\/([^/]+)\/status$/)
+  if (statusMatch) {
+    const deviceId = statusMatch[1]
+    const online   = data.online !== false
+    return { deviceId, online, fw: data.fw_version || null, relays: null }
+  }
 
-  // // relay/<topic>/status
-  // const relayMatch = topic.match(/^relay\/([^/]+)\/status$/)
-  // if (relayMatch) {
-  //   const mqttTopic = relayMatch[1]
-  //   const [dev] = await db`
-  //     SELECT d.device_id FROM devices d
-  //     JOIN groups g ON g.id = d.group_id
-  //     WHERE g.mqtt_topic = ${mqttTopic}
-  //   `
-  //   if (!dev) return null
-  //   return {
-  //     deviceId: dev.device_id,
-  //     online:   data.online !== undefined ? data.online !== false : true,
-  //     fw:       data.fw || null,
-  //     relays:   data.relays || null,
-  //   }
-  // }
+  // relay/<topic>/status
+  const relayMatch = topic.match(/^relay\/([^/]+)\/status$/)
+  if (relayMatch) {
+    const mqttTopic = relayMatch[1]
+    const [dev] = await db`
+      SELECT d.device_id FROM devices d
+      JOIN groups g ON g.id = d.group_id
+      WHERE g.mqtt_topic = ${mqttTopic}
+    `
+    if (!dev) return null
+    return {
+      deviceId: dev.device_id,
+      online:   data.online !== undefined ? data.online !== false : true,
+      fw:       data.fw || null,
+      relays:   data.relays || null,
+    }
+  }
 
   return null
 }
@@ -119,28 +119,8 @@ async function registerDevice({ deviceId, mqttUser, mqttPass, mqttTopic }) {
   const roleName = `role_${deviceId}`
 
   // Шаг 1: удаляем старое (ошибки "not found" ожидаемы)
-  // await _dynsecSend([
-  //   { command: 'deleteClient', username: mqttUser  },
-  //   { command: 'deleteRole',   rolename: roleName  },
-  // ]).catch(() => {})
-
-  // // Шаг 2: создаём пользователя, роль и ACL
-  // await _dynsecSend([
-  //   { command: 'createClient',      username: mqttUser },
-  //   { command: 'setClientPassword', username: mqttUser, password: mqttPass },
-  //   { command: 'createRole',    rolename: roleName },
-  //   { command: 'addRoleACL',    rolename: roleName,
-  //     acltype: 'subscribePattern',  topic: `relay/${mqttTopic}/cmd`,         allow: true },
-  //   { command: 'addRoleACL',    rolename: roleName,
-  //     acltype: 'publishClientSend', topic: `relay/${mqttTopic}/status`,      allow: true },
-  //   { command: 'addRoleACL',    rolename: roleName,
-  //     acltype: 'publishClientSend', topic: `sys/devices/${deviceId}/status`, allow: true },
-  //   { command: 'addClientRole', username: mqttUser, rolename: roleName },
-  // ])
-
-  // console.log(`[local] dynsec OK: user=${mqttUser} topic=relay/${mqttTopic}/cmd`)
-
-    await _dynsecCommand('deleteClient', { username: mqttUser }).catch(() => {})
+  
+  await _dynsecCommand('deleteClient', { username: mqttUser }).catch(() => {})
   await _dynsecCommand('deleteRole',   { rolename: roleName }).catch(() => {})
 
   // Шаг 2: создаём пользователя с паролем сразу, чтобы исключить рассинхрон БД ↔ dynsec.
@@ -156,12 +136,13 @@ async function registerDevice({ deviceId, mqttUser, mqttPass, mqttTopic }) {
 
   const acls = [
     // Унифицированный Yandex-style протокол для local режима.
-    { acltype: 'subscribeLiteral',  topic: `$devices/${mqttUser}/commands`, allow: true },
+    { acltype: 'subscribePattern',  topic: `$devices/${mqttUser}/commands`, allow: true },
+    { acltype: 'publishClientReceive', topic: `$devices/${mqttUser}/commands`, allow: true },
     { acltype: 'publishClientSend', topic: `$devices/${mqttUser}/events`,   allow: true },
-    // Legacy local topics — оставляем для обратной совместимости со старой прошивкой/утилитами.
-    { acltype: 'subscribeLiteral',  topic: `relay/${mqttTopic}/cmd`,         allow: true },
-    { acltype: 'publishClientSend', topic: `relay/${mqttTopic}/status`,      allow: true },
-    { acltype: 'publishClientSend', topic: `sys/devices/${deviceId}/status`, allow: true },
+          // Legacy local topics — оставляем для обратной совместимости со старой прошивкой/утилитами.
+          // { acltype: 'subscribeLiteral',  topic: `relay/${mqttTopic}/cmd`,         allow: true },
+          // { acltype: 'publishClientSend', topic: `relay/${mqttTopic}/status`,      allow: true },
+          // { acltype: 'publishClientSend', topic: `sys/devices/${deviceId}/status`, allow: true },
   ]
 
   for (const acl of acls) {
@@ -255,6 +236,55 @@ async function deleteDevice({ mqttUser, deviceId }) {
   console.log(`[local] dynsec deleted: user=${mqttUser}`)
 }
 
+// ── Самовосстановление ACL/пароля для уже зарегистрированных устройств ──
+async function ensureDeviceAccess({ deviceId, mqttUser, mqttPass, mqttTopic }) {
+  const roleName = `role_${deviceId}`
+
+  // На старых установках клиент/роль могли уже существовать с legacy ACL.
+  // Обновляем пароль и гарантируем наличие обеих (new + legacy) схем топиков.
+  await _dynsecCommand('setClientPassword', { username: mqttUser, password: mqttPass })
+    .catch(() => {})
+  await _dynsecCommand('createRole', { rolename: roleName }).catch(() => {})
+
+  const acls = [
+    { acltype: 'subscribePattern',  topic: `$devices/${mqttUser}/commands`, allow: true },
+    { acltype: 'publishClientReceive', topic: `$devices/${mqttUser}/commands`, allow: true },
+    { acltype: 'publishClientSend', topic: `$devices/${mqttUser}/events`,   allow: true },
+    { acltype: 'subscribePattern',  topic: `relay/${mqttTopic}/cmd`,         allow: true },
+    { acltype: 'publishClientReceive', topic: `relay/${mqttTopic}/cmd`,         allow: true },
+    { acltype: 'publishClientSend', topic: `relay/${mqttTopic}/status`,      allow: true },
+    { acltype: 'publishClientSend', topic: `sys/devices/${deviceId}/status`, allow: true },
+  ]
+  for (const acl of acls) {
+    await _dynsecCommand('addRoleACL', { rolename: roleName, ...acl })
+      .catch(err => console.warn(`[local] ensure ACL skipped ${acl.acltype} ${acl.topic}: ${err.message}`))
+  }
+
+  await _dynsecCommand('addClientRole', {
+    username: mqttUser,
+    rolename: roleName,
+    priority: -1,
+  }).catch(err => console.warn(`[local] ensure addClientRole skipped for ${mqttUser}: ${err.message}`))
+}
+
+async function repairExistingDevices(db) {
+  const rows = await db`
+    SELECT d.device_id, d.mqtt_user, d.mqtt_password, g.mqtt_topic
+    FROM devices d
+    JOIN groups g ON g.id = d.group_id
+    WHERE d.mqtt_user IS NOT NULL AND d.mqtt_password IS NOT NULL
+  `
+  for (const row of rows) {
+    await ensureDeviceAccess({
+      deviceId: row.device_id,
+      mqttUser: row.mqtt_user,
+      mqttPass: row.mqtt_password,
+      mqttTopic: row.mqtt_topic,
+    })
+  }
+  console.log(`[local] ACL repair completed for ${rows.length} device(s)`)
+}
+
 // ── Конфиг для ESP в ответе на регистрацию ───────────────────
 function getEspConfig({ mqttUser, mqttPass, mqttTopic }) {
   return {
@@ -273,5 +303,7 @@ module.exports = {
   getConnectOptions,
   registerDevice,
   deleteDevice,
+  ensureDeviceAccess,
+  repairExistingDevices,
   getEspConfig,
 }

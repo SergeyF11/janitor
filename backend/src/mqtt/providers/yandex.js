@@ -224,6 +224,14 @@ async function deleteDevice({ mqttUser }) {
   }
 }
 
+async function ensureDeviceAccess() {
+  // no-op для Yandex: права и пароль управляются IoT Core
+}
+
+async function repairExistingDevices() {
+  // no-op для Yandex
+}
+
 // ── Конфиг для ESP ────────────────────────────────────────────
 function getEspConfig({ mqttUser, mqttPass, mqttTopic }) {
   return {

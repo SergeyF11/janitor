@@ -17,6 +17,8 @@ async function connect() {
       if (err) console.error('[mqtt] subscribe error:', err.message)
       else console.log('[mqtt] Subscribed:', topics)
     })
+    provider.repairExistingDevices?.(getDb())
+      .catch(err => console.error('[mqtt] ACL repair error:', err.message))
   })
 
   client.on('message', async (topic, payload) => {

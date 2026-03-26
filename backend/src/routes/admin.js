@@ -1,6 +1,7 @@
 'use strict'
 const { getDb } = require('../db/connection')
 const { createUser, resetUserSessions, authenticate, requireRole } = require('../services/auth.service')
+const provider = require('../mqtt/provider')
 
 async function requireGroupAdmin(req, reply) {
   const db = getDb()
@@ -101,8 +102,8 @@ app.post('/admin/relays/:relayId/trigger', {
     const db = getDb()
     const [relay] = await db`
       SELECT r.id, r.name, r.duration_ms, r.device_id, r.last_state,
-             d.mqtt_user, d.group_id, d.is_online,
-             g.status, g.expires_at, g.grace_until
+             d.mqtt_user, d.mqtt_password, d.group_id, d.is_online,
+             g.mqtt_topic, g.status, g.expires_at, g.grace_until
       FROM relays r
       JOIN devices d ON d.device_id = r.device_id
       JOIN groups g ON g.id = d.group_id
@@ -149,7 +150,14 @@ app.post('/admin/relays/:relayId/trigger', {
 
     const mqttClient = app.mqtt
     if (!mqttClient?.connected) return reply.code(503).send({ error: 'mqtt_unavailable' })
+    await provider.ensureDeviceAccess?.({
+      deviceId: relay.device_id,
+      mqttUser: relay.mqtt_user,
+      mqttPass: relay.mqtt_password,
+      mqttTopic: relay.mqtt_topic,
+    })
     mqttClient.publish(topic, JSON.stringify(cmd), { qos: 1 })
+    console.log( `[mqtt publish] ${topic}:${cmd}`);
 
     await db`
       INSERT INTO event_log (action, actor_id, actor_login, group_id, relay_id, payload)
