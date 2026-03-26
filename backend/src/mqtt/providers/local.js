@@ -251,10 +251,10 @@ async function ensureDeviceAccess({ deviceId, mqttUser, mqttPass, mqttTopic, syn
     { acltype: 'subscribePattern',  topic: `$devices/${mqttUser}/commands`, allow: true },
     { acltype: 'publishClientReceive', topic: `$devices/${mqttUser}/commands`, allow: true },
     { acltype: 'publishClientSend', topic: `$devices/${mqttUser}/events`,   allow: true },
-    { acltype: 'subscribePattern',  topic: `relay/${mqttTopic}/cmd`,         allow: true },
-    { acltype: 'publishClientReceive', topic: `relay/${mqttTopic}/cmd`,         allow: true },
-    { acltype: 'publishClientSend', topic: `relay/${mqttTopic}/status`,      allow: true },
-    { acltype: 'publishClientSend', topic: `sys/devices/${deviceId}/status`, allow: true },
+    // { acltype: 'subscribePattern',  topic: `relay/${mqttTopic}/cmd`,         allow: true },
+    // { acltype: 'publishClientReceive', topic: `relay/${mqttTopic}/cmd`,         allow: true },
+    // { acltype: 'publishClientSend', topic: `relay/${mqttTopic}/status`,      allow: true },
+    // { acltype: 'publishClientSend', topic: `sys/devices/${deviceId}/status`, allow: true },
   ]
   for (const acl of acls) {
     await _dynsecCommand('addRoleACL', { rolename: roleName, ...acl })
