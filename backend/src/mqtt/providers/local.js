@@ -237,13 +237,14 @@ async function deleteDevice({ mqttUser, deviceId }) {
 }
 
 // ── Самовосстановление ACL/пароля для уже зарегистрированных устройств ──
-async function ensureDeviceAccess({ deviceId, mqttUser, mqttPass, mqttTopic }) {
+async function ensureDeviceAccess({ deviceId, mqttUser, mqttPass, mqttTopic, syncPassword = false  }) {
   const roleName = `role_${deviceId}`
 
-  // На старых установках клиент/роль могли уже существовать с legacy ACL.
-  // Обновляем пароль и гарантируем наличие обеих (new + legacy) схем топиков.
-  await _dynsecCommand('setClientPassword', { username: mqttUser, password: mqttPass })
-    .catch(() => {})
+// Пароль меняем только в режимах миграции/ремонта, иначе активный ESP получает disconnect.
+  if (syncPassword) {
+    await _dynsecCommand('setClientPassword', { username: mqttUser, password: mqttPass })
+      .catch(() => {})
+  }
   await _dynsecCommand('createRole', { rolename: roleName }).catch(() => {})
 
   const acls = [
@@ -280,6 +281,7 @@ async function repairExistingDevices(db) {
       mqttUser: row.mqtt_user,
       mqttPass: row.mqtt_password,
       mqttTopic: row.mqtt_topic,
+      syncPassword: true,
     })
   }
   console.log(`[local] ACL repair completed for ${rows.length} device(s)`)
