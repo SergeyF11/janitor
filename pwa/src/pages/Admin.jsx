@@ -84,92 +84,92 @@ export default function Admin({ user, onLogout }) {
 }
 
 // ── Главный экран: кнопки управления реле ────────────────────
-function RelayView({ group }) {
-  const [device, setDevice] = useState(null);
-  const [pressing, setPressing] = useState({});   // relayId → bool
-  const [lastState, setLastState] = useState({});  // relayId → state
-  const [error, setError] = useState(null);
+// function RelayView({ group }) {
+//   const [device, setDevice] = useState(null);
+//   const [pressing, setPressing] = useState({});   // relayId → bool
+//   const [lastState, setLastState] = useState({});  // relayId → state
+//   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    getGroupDevice(group.id).then(d => {
-      setDevice(d);
-      // Инициализировать состояния из device.relays
-      if (d?.relays) {
-        const init = {};
-        d.relays.forEach(r => { init[r.id] = r.last_state || 'off'; });
-        setLastState(init);
-      }
-    }).catch(() => {});
-  }, [group.id]);
+//   useEffect(() => {
+//     getGroupDevice(group.id).then(d => {
+//       setDevice(d);
+//       // Инициализировать состояния из device.relays
+//       if (d?.relays) {
+//         const init = {};
+//         d.relays.forEach(r => { init[r.id] = r.last_state || 'off'; });
+//         setLastState(init);
+//       }
+//     }).catch(() => {});
+//   }, [group.id]);
 
-  async function handleTrigger(relay) {
-    setError(null);
-    setPressing(p => ({ ...p, [relay.id]: true }));
-    try {
-      const res = await adminTriggerRelay(relay.id);
-      setLastState(s => ({ ...s, [relay.id]: res.state }));
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setPressing(p => ({ ...p, [relay.id]: false }));
-    }
-  }
+//   async function handleTrigger(relay) {
+//     setError(null);
+//     setPressing(p => ({ ...p, [relay.id]: true }));
+//     try {
+//       const res = await adminTriggerRelay(relay.id);
+//       setLastState(s => ({ ...s, [relay.id]: res.state }));
+//     } catch (e) {
+//       setError(e.message);
+//     } finally {
+//       setPressing(p => ({ ...p, [relay.id]: false }));
+//     }
+//   }
 
-  const hasDevice = !!device?.device_id;
-  const isOnline  = device?.is_online;
-  const relays    = device?.relays || [];
+//   const hasDevice = !!device?.device_id;
+//   const isOnline  = device?.is_online;
+//   const relays    = device?.relays || [];
 
-  return (
-    <div className="relay-view">
-      <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span className={`device-dot ${hasDevice && isOnline ? 'online' : 'offline'}`} />
-        <span style={{ fontSize: 13, color: 'var(--text2)' }}>
-          {hasDevice
-            ? `${isOnline ? 'Онлайн' : 'Оффлайн'} · ${device.device_id}${device.fw_version ? ` · v${device.fw_version}` : ''}`
-            : 'Устройство не привязано'}
-        </span>
-      </div>
+//   return (
+//     <div className="relay-view">
+//       <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+//         <span className={`device-dot ${hasDevice && isOnline ? 'online' : 'offline'}`} />
+//         <span style={{ fontSize: 13, color: 'var(--text2)' }}>
+//           {hasDevice
+//             ? `${isOnline ? 'Онлайн' : 'Оффлайн'} · ${device.device_id}${device.fw_version ? ` · v${device.fw_version}` : ''}`
+//             : 'Устройство не привязано'}
+//         </span>
+//       </div>
 
-      {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
+//       {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
 
-      {relays.length === 0 && hasDevice && (
-        <div style={{ color: 'var(--text2)', fontSize: 13 }}>Реле не найдены</div>
-      )}
+//       {relays.length === 0 && hasDevice && (
+//         <div style={{ color: 'var(--text2)', fontSize: 13 }}>Реле не найдены</div>
+//       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {relays.map(relay => {
-          const state   = lastState[relay.id] || 'off';
-          const isPulse = relay.duration_ms > 0;
-          const busy    = pressing[relay.id];
+//       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+//         {relays.map(relay => {
+//           const state   = lastState[relay.id] || 'off';
+//           const isPulse = relay.duration_ms > 0;
+//           const busy    = pressing[relay.id];
 
-          return (
-            <div key={relay.id}>
-              {relays.length > 1 && (
-                <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}>{relay.name}</div>
-              )}
-              <button
-                className={[
-                  'relay-btn',
-                  isPulse ? 'relay-pulse' : (state === 'on' ? 'relay-on' : 'relay-off'),
-                  busy ? 'relay-busy' : '',
-                  !isOnline ? 'relay-offline' : '',
-                ].join(' ')}
-                onClick={() => handleTrigger(relay)}
-                disabled={busy || !hasDevice}
-              >
-                {busy ? (
-                  <span className="relay-btn-spinner" />
-                ) : (
-                  isPulse ? `▶ ${relay.name}` : (state === 'on' ? `● ${relay.name} — Вкл` : `○ ${relay.name} — Выкл`)
-                )}
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+//           return (
+//             <div key={relay.id}>
+//               {relays.length > 1 && (
+//                 <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}>{relay.name}</div>
+//               )}
+//               <button
+//                 className={[
+//                   'relay-btn',
+//                   isPulse ? 'relay-pulse' : (state === 'on' ? 'relay-on' : 'relay-off'),
+//                   busy ? 'relay-busy' : '',
+//                   !isOnline ? 'relay-offline' : '',
+//                 ].join(' ')}
+//                 onClick={() => handleTrigger(relay)}
+//                 disabled={busy || !hasDevice}
+//               >
+//                 {busy ? (
+//                   <span className="relay-btn-spinner" />
+//                 ) : (
+//                   isPulse ? `▶ ${relay.name}` : (state === 'on' ? `● ${relay.name}` : `○ ${relay.name}`)
+//                 )}
+//               </button>
+//             </div>
+//           );
+//         })}
+//       </div>
+//     </div>
+//   );
+// }
 
 // ── Настройки: пользователи / устройство / журнал ─────────────
 function SettingsView({ group, groups, onBack }) {

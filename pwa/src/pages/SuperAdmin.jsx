@@ -317,8 +317,8 @@ function AdminsTab({ data, reload }) {
 }
 
 
-// ── Транслитерация для mqtt_topic ─────────────────────────────
-function toMqttTopic(str) {
+// ── Транслитерация для groupSlug ─────────────────────────────
+function toGroupSlug(str) {
   const map = {
     'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh',
     'з':'z','и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o',
@@ -332,8 +332,9 @@ function toMqttTopic(str) {
 
 // ── Группы ────────────────────────────────────────────────────
 function GroupsTab({ data, reload, onCreds }) {
+  const getTodayDate = () => new Date().toISOString().split('T')[0]
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm]     = useState({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0 })
+  const [form, setForm]     = useState({ name: '', groupSlug: '', relay_duration_ms: 500, user_quota: 0, expires_at: getTodayDate() })
   const [assignId, setAssignId]       = useState({})   // groupId → selected adminId
   const [allAdmins, setAllAdmins]     = useState([])
   const [saving, setSaving]           = useState(false)
@@ -429,8 +430,8 @@ function GroupsTab({ data, reload, onCreds }) {
     e.preventDefault()
     setSaving(true); setErr(null)
     try {
-      const result = await saCreateGroup(form)
-      setForm({ name: '', mqtt_topic: '', relay_duration_ms: 500, user_quota: 0, _topic_edited: false })
+      const result = await saCreateGroup({ ...form, mqtt_topic: form.groupSlug })
+      setForm({ name: '', groupSlug: '', relay_duration_ms: 500, user_quota: 0, expires_at: getTodayDate(), _topic_edited: false })
       setShowCreate(false)
       reload()
       if (result && result.admin_login) {
@@ -500,16 +501,35 @@ function GroupsTab({ data, reload, onCreds }) {
                        setForm(f => ({
                          ...f,
                          name,
-                         mqtt_topic: f._topic_edited ? f.mqtt_topic : toMqttTopic(name)
+                         groupSlug: f._topic_edited ? f.groupSlug : toGroupSlug(name)
                        }))
                      }}
                      required />
             </div>
             <div className="field">
-              <label>MQTT топик (авто)</label>
-              <input value={form.mqtt_topic}
-                     onChange={e => setForm(f => ({ ...f, mqtt_topic: e.target.value, _topic_edited: true }))}
+              <label>Псевдоним (авто)</label>
+              <input value={form.groupSlug}
+                     onChange={e => setForm(f => ({ ...f, groupSlug: e.target.value, _topic_edited: true }))}
                      placeholder="авто из названия" />
+            </div>
+            <div className="field">
+              <label>Срок действия</label>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px' }}>
+                <input
+                  type="date"
+                  value={form.expires_at || ''}
+                  onChange={e => setForm(f => ({ ...f, expires_at: e.target.value }))}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text)', fontSize: 14, colorScheme: 'dark' }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  onClick={() => setForm(f => ({ ...f, expires_at: '' }))}
+                  title="Убрать срок (бессрочно)"
+                >
+                  ✕
+                </button>
+              </span>
             </div>
 
             <div className="field">

@@ -168,9 +168,9 @@ export default function Main({ user, onLogout }) {
                       ) : isPulse ? (
                         `▶ ${relay.name}`
                       ) : isOn ? (
-                        `● ${relay.name} — Вкл`
+                        `● ${relay.name}`
                       ) : (
-                        `○ ${relay.name} — Выкл`
+                        `○ ${relay.name}`
                       )}
                     </button>
                   )
@@ -589,7 +589,7 @@ function RelaysTab({ group }) {
               >
                 {busy ? <span className="relay-btn-spinner" />
                   : isPulse ? `▶ ${relay.name}`
-                  : state === 'on' ? `● ${relay.name} — Вкл` : `○ ${relay.name} — Выкл`}
+                  : state === 'on' ? `● ${relay.name}` : `○ ${relay.name}`}
               </button>
             </div>
           )
