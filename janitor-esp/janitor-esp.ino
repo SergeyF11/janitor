@@ -12,9 +12,8 @@
  *  5. ESP подключается к MQTT и готов принимать команды
  *
  * MQTT:
- *  relay/{topic}/cmd    ← входящие команды: {action, relay, duration?}
- *  relay/{topic}/status → статус всех реле (retained)
- *  sys/devices/{mac}/status → LWT: online/offline (retained)
+ *  $devices/{mqtt_user}/commands ← входящие команды: {action, relay, duration?}
+ *  $devices/{mqtt_user}/events   → online/offline + статус реле
  */
 
 #include "config.h"

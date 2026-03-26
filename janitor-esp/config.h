@@ -38,18 +38,26 @@
 
 #define MAX_RELAYS        4
 
-// MQTT топики
-// registry_id — заполняется при регистрации из ответа сервера
-// mqtt_user   — YC device ID, используется для команд
-#define DEVICE_CMD_TMPL    "$devices/%s/commands"      // ← команды: %s = mqtt_user (YC device ID)
-#define DEVICE_EVENTS_TMPL "$devices/%s/events" 
-#define DEVICE_STATUS_TMPL DEVICE_EVENTS_TMPL 
-//#define DEVICE_STATUS_TMPL "$devices/%s/status" 
-//#define DEVICE_EVENTS_TMPL DEVICE_STATUS_TMPL
+// // MQTT топики
+// // registry_id — заполняется при регистрации из ответа сервера
+// // mqtt_user   — YC device ID, используется для команд
+// #define DEVICE_CMD_TMPL    "$devices/%s/commands"      // ← команды: %s = mqtt_user (YC device ID)
+// #define DEVICE_EVENTS_TMPL "$devices/%s/events" 
+// #define DEVICE_STATUS_TMPL DEVICE_EVENTS_TMPL 
+// //#define DEVICE_STATUS_TMPL "$devices/%s/status" 
+// //#define DEVICE_EVENTS_TMPL DEVICE_STATUS_TMPL
 
-//const char DEVICE_TMPL[] PROGMEM = "$devices/%s/%s";
+// //const char DEVICE_TMPL[] PROGMEM = "$devices/%s/%s";
 
-//#define REGITRIES_EVENTS_TMPL "$registries/%s/events"     // → события:  %s = registry_id
+// //#define REGITRIES_EVENTS_TMPL "$registries/%s/events"     // → события:  %s = registry_id
+
+// Для local и Yandex используем максимально одинаковую модель:
+//   $devices/{mqtt_user}/commands
+//   $devices/{mqtt_user}/events
+#define DEVICE_CMD_TMPL    "$devices/%s/commands"
+#define DEVICE_EVENTS_TMPL "$devices/%s/events"
+#define DEVICE_STATUS_TMPL DEVICE_EVENTS_TMPL
+
 
 // ── Реле ──────────────────────────────────────────────────────
 struct RelayConfig {
@@ -97,10 +105,13 @@ struct DeviceConfig {
   bool hasPendingCode() const { return strlen(reg_code) == 6; }
 
   bool isRegistered() const {
-    if (!registered || !strlen(mqtt_host) || !strlen(mqtt_user)) return false;
-    // local: нужен mqtt_topic; yandex: нужен registry_id; принимаем любой из двух
-    return strlen(mqtt_topic) > 0 || strlen(registry_id) > 0;
+    return registered && strlen(mqtt_host) > 0 &&
+           strlen(mqtt_user) > 0 && strlen(mqtt_pass) > 0;
   }
+    // if (!registered || !strlen(mqtt_host) || !strlen(mqtt_user)) return false;
+    // // local: нужен mqtt_topic; yandex: нужен registry_id; принимаем любой из двух
+    // return strlen(mqtt_topic) > 0 || strlen(registry_id) > 0;
+  //}
 
   // true = Яндекс, false = local Mosquitto
   bool isYandex() const { return strlen(registry_id) > 0; }
@@ -113,9 +124,12 @@ struct DeviceConfig {
       if (isYandex()) {
         s.printf("MQTT: %s@%s:%u registry=%s\n",
           mqtt_user, mqtt_host, mqtt_port, registry_id);
-      } else {
+      } else if (strlen(mqtt_topic)) {
         s.printf("MQTT: %s@%s:%u topic=%s\n",
           mqtt_user, mqtt_host, mqtt_port, mqtt_topic);
+      } else {
+        s.printf("MQTT: %s@%s:%u\n",
+          mqtt_user, mqtt_host, mqtt_port);
       }
     } else if (hasPendingCode()) {
       s.printf("Pending code: %s\n", reg_code);
