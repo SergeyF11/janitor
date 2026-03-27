@@ -9,6 +9,10 @@ import {
   saGetLogs, saQuery, logout
 } from '../api'
 
+const DEFAULT_RELAY_MS = 1000
+const DEFAULT_GROUP_QUOTA = 5
+const DEFAULT_GROUP_EXPIRES_DAYS = 30
+const DEFAULT_GROUP_EXPIRES_AT = new Date(Date.now() + DEFAULT_GROUP_EXPIRES_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
 const TABS = ['stats', 'admins', 'groups', 'users', 'devices', 'logs', 'sql']
 const TAB_LABELS = {
@@ -334,7 +338,13 @@ function toGroupSlug(str) {
 function GroupsTab({ data, reload, onCreds }) {
   const getTodayDate = () => new Date().toISOString().split('T')[0]
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm]     = useState({ name: '', groupSlug: '', relay_duration_ms: 500, user_quota: 0, expires_at: getTodayDate() })
+  const [form, setForm]     = useState({ 
+    name: '', 
+    groupSlug: '', 
+    relay_duration_ms: DEFAULT_RELAY_MS, 
+    user_quota: DEFAULT_GROUP_QUOTA, 
+    expires_at: DEFAULT_GROUP_EXPIRES_AT //getTodayDate()
+  })
   const [assignId, setAssignId]       = useState({})   // groupId → selected adminId
   const [allAdmins, setAllAdmins]     = useState([])
   const [saving, setSaving]           = useState(false)
@@ -518,12 +528,12 @@ function GroupsTab({ data, reload, onCreds }) {
             </div>
             <div className="field">
               <label>Срок действия</label>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px' }}>
                 <input
                   type="date"
                   value={form.expires_at || ''}
                   onChange={e => setForm(f => ({ ...f, expires_at: e.target.value }))}
-                  style={{ flex: 1 }}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text)', fontSize: 14, colorScheme: 'dark', flex: 1, padding: '4px 0', outline: 'none' }}
                 />
                 <button
                   type="button"
