@@ -222,7 +222,12 @@ async function superadminRoutes(app) {
           name:       { type: 'string', minLength: 1, maxLength: 100 },
           mqtt_topic: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[a-z0-9_-]+$' },
           user_quota: { type: 'integer', minimum: 0, default: 0 },
-          expires_at: { type: 'string', format: 'date-time' },
+          expires_at: {
+            anyOf: [
+              { type: 'string', format: 'date-time' },
+              { type: 'string', format: 'date' }
+            ]
+          }
         }
       }
     }
@@ -233,16 +238,24 @@ async function superadminRoutes(app) {
     const [taken] = await db`SELECT id FROM groups WHERE mqtt_topic = ${mqtt_topic}`
     if (taken) return reply.code(409).send({ error: 'mqtt_topic_taken' })
 
-    // Вычисляем grace_until = expires_at + 1 месяц (30 дней)
-    let grace_until = null
+    // Вычисляем expires_at в ISO и grace_until = expires_at + 1 месяц (30 дней)
+    let expiresAtIso = null
     if (expires_at) {
-      const expiresDate = new Date(expires_at)
+      const d = new Date(expires_at)
+      if (!Number.isNaN(d.getTime())) {
+        expiresAtIso = d.toISOString()
+      }
+    }
+
+    let grace_until = null
+    if (expiresAtIso) {
+      const expiresDate = new Date(expiresAtIso)
       grace_until = new Date(expiresDate.getTime() + 30 * 24 * 60 * 60 * 1000)
     }
 
     const [group] = await db`
       INSERT INTO groups (name, mqtt_topic, user_quota, expires_at, grace_until, created_by)
-      VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expires_at || null}, ${grace_until}, ${req.user.id})
+      VALUES (${name}, ${mqtt_topic}, ${user_quota}, ${expiresAtIso || null}, ${grace_until}, ${req.user.id})
       RETURNING *
     `
 

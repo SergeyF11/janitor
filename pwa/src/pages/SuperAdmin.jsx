@@ -349,8 +349,11 @@ function GroupsTab({ data, reload, onCreds }) {
 
   // Функция для проверки, находится ли группа в льготном периоде
   const isGroupInGrace = (g) => {
+    if (g.status !== 'active' || !g.expires_at || !g.grace_until) return false
     const now = new Date()
-    return g.status === 'active' && g.grace_until && new Date(g.grace_until) > now
+    const expiresAt = new Date(g.expires_at)
+    const graceUntil = new Date(g.grace_until)
+    return now >= expiresAt && now < graceUntil
   }
 
   // Отфильтрованный список
@@ -430,7 +433,8 @@ function GroupsTab({ data, reload, onCreds }) {
     e.preventDefault()
     setSaving(true); setErr(null)
     try {
-      const result = await saCreateGroup({ ...form, mqtt_topic: form.groupSlug })
+      const isoExpires = form.expires_at ? new Date(form.expires_at + 'T00:00:00Z').toISOString() : null
+      const result = await saCreateGroup({ ...form, mqtt_topic: form.groupSlug, expires_at: isoExpires })
       setForm({ name: '', groupSlug: '', relay_duration_ms: 500, user_quota: 0, expires_at: getTodayDate(), _topic_edited: false })
       setShowCreate(false)
       reload()
@@ -514,12 +518,12 @@ function GroupsTab({ data, reload, onCreds }) {
             </div>
             <div className="field">
               <label>Срок действия</label>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input
                   type="date"
                   value={form.expires_at || ''}
                   onChange={e => setForm(f => ({ ...f, expires_at: e.target.value }))}
-                  style={{ background: 'transparent', border: 'none', color: 'var(--text)', fontSize: 14, colorScheme: 'dark' }}
+                  style={{ flex: 1 }}
                 />
                 <button
                   type="button"
@@ -529,7 +533,7 @@ function GroupsTab({ data, reload, onCreds }) {
                 >
                   ✕
                 </button>
-              </span>
+              </div>
             </div>
 
             <div className="field">
