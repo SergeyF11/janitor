@@ -1,5 +1,6 @@
 #pragma once
 #include <GyverPortal.h>
+#include <WebServer.h>
 
 #define MINUTES *3600L
 
@@ -86,7 +87,7 @@ setTimeout(_sync, 700);
 )raw";
 
     // Обработчик /get_time – возвращает локальный timestamp
-    inline void handler(ESP8266WebServer& s) {
+    inline void handler(WebServer& s) {
         s.on("/get_time", [&s]() {
             time_t now = time(nullptr);               // UTC
             s.send(200, "text/plain", String(now));
@@ -118,7 +119,7 @@ window.onload = function() {
 )raw";
 
 
-    inline void handler(ESP8266WebServer& s, const char* ntp1 = "ru.pool.ntp.org", const char* ntp2 = nullptr, const char* ntp3 = nullptr) {
+    inline void handler(WebServer& s, const char* ntp1 = "ru.pool.ntp.org", const char* ntp2 = nullptr, const char* ntp3 = nullptr) {
         s.on("/set_time", [&s, ntp1, ntp2, ntp3]() {
 
             if (!s.hasArg("tz") || !s.hasArg("offset")) {
@@ -137,8 +138,9 @@ window.onload = function() {
 
             // Если TZ уже был настроен – игнорируем (просто отвечаем 200)
             if (EspTime::tzConfigured()) {
-                configTime( EspTime::getTz(), ntp1, ntp2, ntp3);
-
+                
+                //configTime( EspTime::getTz(), ntp1, ntp2, ntp3);
+                //auto _tz = EspTime::getTz();
             } else {
                 // (Пере)запускаем NTP с нулевым смещением (встроенный SNTP будет обновлять время)
                 configTime(0, 0, ntp1, ntp2, ntp3);

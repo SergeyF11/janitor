@@ -48,7 +48,7 @@ bool PhoneDB::_loadHashTable() {
     HashRecord rec;
     while (f.read((uint8_t*)&rec, sizeof(rec)) == sizeof(rec)) {
         if (rec.offset == 0) continue;
-        uint32_t bucket = rec.hash % PHONEDB_HASH_BUCKETS;
+        uint32_t bucket = rec.hash() % PHONEDB_HASH_BUCKETS;
 
         // Линейное пробирование при коллизии
         for (uint16_t i = 0; i < PHONEDB_HASH_BUCKETS; i++) {
@@ -71,7 +71,9 @@ bool PhoneDB::_saveHashEntry(uint32_t hash, uint16_t offset) {
     for (uint16_t i = 0; i < PHONEDB_HASH_BUCKETS; i++) {
         uint16_t slot = (bucket + i) % PHONEDB_HASH_BUCKETS;
         if (_hashTable[slot].offset == 0) {
-            _hashTable[slot] = { hash, offset };
+            _hashTable[slot].setHash(hash);
+            _hashTable[slot].offset = offset;
+            //_hashTable[slot] = { hash, offset };
             break;
         }
     }
@@ -90,8 +92,8 @@ bool PhoneDB::_saveHashEntry(uint32_t hash, uint16_t offset) {
 // ── Удалить запись из хэш-таблицы ────────────────────────────
 bool PhoneDB::_removeHashEntry(uint32_t hash, uint16_t offset) {
     for (uint16_t i = 0; i < PHONEDB_HASH_BUCKETS; i++) {
-        if (_hashTable[i].hash == hash && _hashTable[i].offset == offset) {
-            _hashTable[i] = { 0, 0 };
+        if (_hashTable[i].hash() == hash && _hashTable[i].offset == offset) {
+            _hashTable[i] = { 0, 0, 0 };
             break;
         }
     }
@@ -275,7 +277,7 @@ PhoneLookup PhoneDB::findByPhone(uint64_t phone) const {
     for (uint16_t i = 0; i < PHONEDB_HASH_BUCKETS && candCount < 4; i++) {
         uint16_t slot = (bucket + i) % PHONEDB_HASH_BUCKETS;
         if (_hashTable[slot].offset == 0) continue;
-        if (_hashTable[slot].hash == hash) {
+        if (_hashTable[slot].hash() == hash) {
             candidates[candCount++] = { _hashTable[slot].offset };
         }
     }

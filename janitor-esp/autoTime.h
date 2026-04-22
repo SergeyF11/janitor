@@ -27,34 +27,34 @@ namespace EspTime {
 
     // Безопасный вывод локального времени в Serial (с защитой от NULL)
 inline void timeTo(Stream& s) {
-        struct timeval tv;
-        gettimeofday(&tv, NULL); // Получаем системное время с микросекундами
-        
-        time_t now = tv.tv_sec;
-        // auto now = time(nullptr);
-        struct tm* timeinfo = localtime(&now);
-        
-        // Рассчитываем миллисекунды из микросекунд
-        long milliseconds = tv.tv_usec / 1000;
-        auto tzStr = getenv("TZ") ? getenv("TZ") : "GMT";
+    struct timeval tv;
+    gettimeofday(&tv, NULL); // Получаем системное время с микросекундами
+    
+    time_t now = tv.tv_sec;
+    // auto now = time(nullptr);
+    struct tm* timeinfo = localtime(&now);
+    
+    // Рассчитываем миллисекунды из микросекунд
+    long milliseconds = tv.tv_usec / 1000;
+    auto tzStr = getenv("TZ") ? getenv("TZ") : "GMT";
 
-        s.printf("Local time: %02d:%02d:%02d.%03ld %s\n",
-                timeinfo->tm_hour, 
-                timeinfo->tm_min, 
-                timeinfo->tm_sec, 
-                milliseconds,
-                tzStr
-                );
-        
-        timeinfo = gmtime(&now); // Это ЧИСТЫЙ UTC (например, 14:19)       
-        //time_t utc = mktime(utcTm);
-
-        s.printf("UTC time: %02d:%02d:%02d\n",
+    s.printf("Local time: %02d:%02d:%02d.%03ld %s\n",
             timeinfo->tm_hour, 
             timeinfo->tm_min, 
-            timeinfo->tm_sec 
-        );
-    }
+            timeinfo->tm_sec, 
+            milliseconds,
+            tzStr
+            );
+    
+    timeinfo = gmtime(&now); // Это ЧИСТЫЙ UTC (например, 14:19)       
+    //time_t utc = mktime(utcTm);
+
+    s.printf("UTC time: %02d:%02d:%02d\n",
+        timeinfo->tm_hour, 
+        timeinfo->tm_min, 
+        timeinfo->tm_sec 
+    );
+}
 
     // Скрипт для отображения часов (запрашивает локальный timestamp у ESP)
     const char SCRIPT[] PROGMEM = R"raw(

@@ -16,7 +16,11 @@ public:
   static void begin() {
     uint8_t mac[6];
     #ifdef ESP32
-      esp_read_mac(mac, ESP_MAC_WIFI_STA);
+      //esp_read_mac(mac, ESP_MAC_WIFI_STA);
+      uint64_t macAddr = ESP.getEfuseMac();
+      for (int i = 0; i < 6; i++) {
+        mac[i] = (macAddr >> (8 * (5 - i))) & 0xFF;
+      }
     #else
       WiFi.macAddress(mac);
     #endif
@@ -172,6 +176,8 @@ private:
     cfg.mqtt_port  = MQTT_PORT_TLS;
     cfg.tls_secure = false;
     cfg.registered = false;
+    cfg.gsm_enabled = true;
+    memset(cfg.sim_pin, 0, sizeof(cfg.sim_pin));
     cfg.relays[0].pin        = 5;
     cfg.relays[0].active_low = true;
     strlcpy(cfg.relays[0].name, "Relay 1", sizeof(cfg.relays[0].name));
@@ -197,6 +203,8 @@ private:
     cfg.registered = doc["reg"] | false;
     cfg.tls_secure = doc["tls"] | false;
     strlcpy(cfg.tz, doc["tz"] | "", sizeof(cfg.tz));
+    strlcpy(cfg.sim_pin, doc["sp"] | "", sizeof(cfg.sim_pin));
+    cfg.gsm_enabled = doc["gsm"] | true;
     return true;
   }
 
@@ -217,6 +225,8 @@ private:
     doc["reg"] = cfg.registered;
     doc["tls"] = cfg.tls_secure;
     doc["tz"]  = cfg.tz;
+    doc["sp"]  = cfg.sim_pin;
+    doc["gsm"] = cfg.gsm_enabled;
     String out; serializeJson(doc, out);
     return out;
   }

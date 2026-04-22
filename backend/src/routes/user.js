@@ -103,7 +103,16 @@ async function userRoutes(app) {
       mqttPass: relay.mqtt_password,
       mqttTopic: relay.mqtt_topic,
     })
-    mqttClient.publish(topic, JSON.stringify(cmd), { qos: 1 })
+    const options = { 
+      qos: 1 
+      // properties: { 
+      //   messageExpiryInterval: 10 // TTL 10 секунд
+      // } 
+    };
+    mqttClient.publish(topic, JSON.stringify(cmd), options,  (err) => {
+      if (err) console.error(`[mqtt error] ${err}`);
+    });
+
     console.log( `[mqtt publish] ${topic}:${cmd}`);
 
     await db`

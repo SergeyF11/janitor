@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   getAdminGroups, getGroupUsers, getAdminUsers, createUser, addUserById, importUsersFromGroup,
   removeUserFromGroup, resetUserSessions, updateSingleSession, adminResetUserPassword,
-  getGroupDevice, generateDeviceToken, adminTriggerRelay,
-  getGroupLogs, logout, updateUserDescription
+  getGroupDevice, generateDeviceToken, adminTriggerRelay, getGroupLogs,
+  gsmGetPhones, gsmSetPhone, gsmDeletePhone, gsmGetPhoneNumber,
+  gsmGetSmsJournal, gsmSendSms, gsmClearSmsJournal,
+  gsmTriggerCompaction, gsmDownloadBackup, gsmRestoreBackup,
 } from '../api'
 
 export default function Admin({ user, onLogout }) {
@@ -84,92 +86,84 @@ export default function Admin({ user, onLogout }) {
 }
 
 // ── Главный экран: кнопки управления реле ────────────────────
-// function RelayView({ group }) {
-//   const [device, setDevice] = useState(null);
-//   const [pressing, setPressing] = useState({});   // relayId → bool
-//   const [lastState, setLastState] = useState({});  // relayId → state
-//   const [error, setError] = useState(null);
+function RelayView({ group }) {
+  const [device, setDevice]       = useState(null)
+  const [pressing, setPressing]   = useState({})
+  const [lastState, setLastState] = useState({})
+  const [error, setError]         = useState(null)
 
-//   useEffect(() => {
-//     getGroupDevice(group.id).then(d => {
-//       setDevice(d);
-//       // Инициализировать состояния из device.relays
-//       if (d?.relays) {
-//         const init = {};
-//         d.relays.forEach(r => { init[r.id] = r.last_state || 'off'; });
-//         setLastState(init);
-//       }
-//     }).catch(() => {});
-//   }, [group.id]);
+  useEffect(() => {
+    getGroupDevice(group.id).then(setDevice).catch(() => {})
+  }, [group.id])
 
-//   async function handleTrigger(relay) {
-//     setError(null);
-//     setPressing(p => ({ ...p, [relay.id]: true }));
-//     try {
-//       const res = await adminTriggerRelay(relay.id);
-//       setLastState(s => ({ ...s, [relay.id]: res.state }));
-//     } catch (e) {
-//       setError(e.message);
-//     } finally {
-//       setPressing(p => ({ ...p, [relay.id]: false }));
-//     }
-//   }
+  async function handleTrigger(relayIndex = 0) {
+    setError(null)
+    setPressing(p => ({ ...p, [relayIndex]: true }))
+    try {
+      const res = await adminTriggerRelay(group.id, relayIndex)
+      setLastState(s => ({ ...s, [relayIndex]: res.state }))
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setPressing(p => ({ ...p, [relayIndex]: false }))
+    }
+  }
 
-//   const hasDevice = !!device?.device_id;
-//   const isOnline  = device?.is_online;
-//   const relays    = device?.relays || [];
+  const isPulse   = group.relay_duration_ms > 0
+  const hasDevice = !!device?.device_id
+  const isOnline  = device?.is_online
 
-//   return (
-//     <div className="relay-view">
-//       <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-//         <span className={`device-dot ${hasDevice && isOnline ? 'online' : 'offline'}`} />
-//         <span style={{ fontSize: 13, color: 'var(--text2)' }}>
-//           {hasDevice
-//             ? `${isOnline ? 'Онлайн' : 'Оффлайн'} · ${device.device_id}${device.fw_version ? ` · v${device.fw_version}` : ''}`
-//             : 'Устройство не привязано'}
-//         </span>
-//       </div>
+  const relays = device?.relay_index != null
+    ? [{ index: device.relay_index, name: 'Реле ' + (device.relay_index + 1) }]
+    : [{ index: 0, name: 'Реле 1' }]
 
-//       {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
+  return (
+    <div className="relay-view">
+      {/* Статус устройства */}
+      <div className="device-status-bar">
+        <span className={`device-dot-lg ${hasDevice && isOnline ? 'online' : 'offline'}`} />
+        <span style={{ fontSize: 13, color: 'var(--text2)' }}>
+          {hasDevice
+            ? `${isOnline ? 'Онлайн' : 'Оффлайн'} · ${device.device_id}${device.fw_version ? ` · v${device.fw_version}` : ''}`
+            : 'Устройство не привязано'}
+        </span>
+      </div>
 
-//       {relays.length === 0 && hasDevice && (
-//         <div style={{ color: 'var(--text2)', fontSize: 13 }}>Реле не найдены</div>
-//       )}
+      {error && <div style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0' }}>{error}</div>}
 
-//       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-//         {relays.map(relay => {
-//           const state   = lastState[relay.id] || 'off';
-//           const isPulse = relay.duration_ms > 0;
-//           const busy    = pressing[relay.id];
-
-//           return (
-//             <div key={relay.id}>
-//               {relays.length > 1 && (
-//                 <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}>{relay.name}</div>
-//               )}
-//               <button
-//                 className={[
-//                   'relay-btn',
-//                   isPulse ? 'relay-pulse' : (state === 'on' ? 'relay-on' : 'relay-off'),
-//                   busy ? 'relay-busy' : '',
-//                   !isOnline ? 'relay-offline' : '',
-//                 ].join(' ')}
-//                 onClick={() => handleTrigger(relay)}
-//                 disabled={busy || !hasDevice}
-//               >
-//                 {busy ? (
-//                   <span className="relay-btn-spinner" />
-//                 ) : (
-//                   isPulse ? `▶ ${relay.name}` : (state === 'on' ? `● ${relay.name}` : `○ ${relay.name}`)
-//                 )}
-//               </button>
-//             </div>
-//           );
-//         })}
-//       </div>
-//     </div>
-//   );
-// }
+      {/* Кнопки реле */}
+      <div className="relay-buttons">
+        {relays.map(relay => {
+          const st   = lastState[relay.index]
+          const busy = pressing[relay.index]
+          return (
+            <button
+              key={relay.index}
+              className={`relay-btn${st === 'on' ? ' relay-btn-on' : ''}${busy ? ' relay-btn-busy' : ''}`}
+              onClick={() => handleTrigger(relay.index)}
+              disabled={busy || !hasDevice}
+            >
+              {busy
+                ? <span className="relay-btn-spinner" />
+                : <>
+                    <span className="relay-btn-icon">
+                      {isPulse ? '⚡' : st === 'on' ? '🔴' : '🟢'}
+                    </span>
+                    <span className="relay-btn-label">{relay.name}</span>
+                    <span className="relay-btn-hint">
+                      {isPulse
+                        ? `импульс ${group.relay_duration_ms / 1000} с`
+                        : st === 'on' ? 'включено' : st === 'off' ? 'выключено' : '—'}
+                    </span>
+                  </>
+              }
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 // ── Настройки: пользователи / устройство / журнал ─────────────
 function SettingsView({ group, groups, onBack }) {
@@ -178,14 +172,15 @@ function SettingsView({ group, groups, onBack }) {
   const [device, setDevice]   = useState(null)
   const [logs, setLogs]       = useState([])
   const [showAddUser, setShowAddUser] = useState(false)
-  const [editingDesc, setEditingDesc] = useState(null)   // userId
-  const [editDescValue, setEditDescValue] = useState('')
-  const [resetPwd, setResetPwd]       = useState({})  // userId → string
+  const [resetPwd, setResetPwd]       = useState({})
   const [addMode, setAddMode] = useState('new')
   const [newUser, setNewUser] = useState({ login: '', password: '', role: 'user', description: '', single_session: true })
   const [existingUser, setExistingUser] = useState({ user_id: '', description: '' })
   const [addError, setAddError] = useState(null)
   const [saving, setSaving]   = useState(false)
+
+  // Определяем GSM-устройство по fw_version
+  const isGsmDevice = device?.fw_version?.includes('gsm')
 
   async function handleResetPwd(userId) {
     const pwd = (resetPwd[userId] || '').trim()
@@ -201,6 +196,7 @@ function SettingsView({ group, groups, onBack }) {
     if (tab === 'users')  { const u = await getGroupUsers(group.id);  setUsers(u)  }
     if (tab === 'device') { const d = await getGroupDevice(group.id); setDevice(d) }
     if (tab === 'logs')   { const l = await getGroupLogs(group.id);   setLogs(l)   }
+    // GSM — device загружается при открытии device-таба, isGsmDevice вычисляется от него
   }, [group.id, tab])
 
   useEffect(() => { loadTab() }, [loadTab])
@@ -233,6 +229,11 @@ function SettingsView({ group, groups, onBack }) {
             {{ users: 'Пользователи', device: 'Устройство', logs: 'Журнал' }[t]}
           </button>
         ))}
+        {isGsmDevice && (
+          <button className={`tab ${tab === 'gsm' ? 'active' : ''}`} onClick={() => setTab('gsm')}>
+            📱 GSM
+          </button>
+        )}
       </div>
 
       {/* ── Пользователи ── */}
@@ -291,16 +292,8 @@ function SettingsView({ group, groups, onBack }) {
                     </div>
                   </>
                 ) : (
-                  <div className="field">
-                    <label>ID пользователя</label>
-                    <input
-                      type="text"
-                      value={existingUser.user_id}
-                      onChange={e => setExistingUser(u => ({ ...u, user_id: e.target.value }))}
-                      placeholder="00000000-0000-0000-0000-000000000000"
-                      required
-                    />
-                  </div>
+                  <ExistingUserPicker groupId={group.id} value={existingUser.user_id}
+                                      onChange={uid => setExistingUser(u => ({ ...u, user_id: uid }))} />
                 )}
                 <div className="field">
                   <label>Описание в группе</label>
@@ -321,88 +314,54 @@ function SettingsView({ group, groups, onBack }) {
           )}
 
           <div className="users-list">
-          {users.length === 0 && <div className="empty-state">Нет пользователей</div>}
-          {users.map(u => (
-            <div key={u.id} className="user-card">
-              <div className="user-card-main">
-                <div className="user-info">
-                  <span className="user-login">
-                    { u.registration_topic ? `${u.login}@${u.registration_topic}` : u.login }
-                  </span>
-                  {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
-                  <span className={`user-role role-${u.role}`}>{u.role}</span>
-                  {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
-                  {!u.is_active && <span className="badge-inactive">неактивен</span>}
+            {users.length === 0 && <div className="empty-state">Нет пользователей</div>}
+            {users.map(u => (
+              <div key={u.id} className="user-card">
+                <div className="user-card-main">
+                  <div className="user-info">
+                    <span className="user-login">{u.login}</span>
+                    {u.display_name && <span className="user-display-name-inline">{u.display_name}</span>}
+                    <span className={`user-role role-${u.role}`}>{u.role}</span>
+                    {u.has_session && <span className="session-dot" title="Есть активная сессия">●</span>}
+                    {!u.is_active && <span className="badge-inactive">неактивен</span>}
+                  </div>
+                  {u.description && <div className="user-description">{u.description}</div>}
+                  <div className="user-uid">
+                    <span className="user-uid-label">ID:</span>
+                    <code className="user-uid-value">{u.id}</code>
+                    <button className="btn-copy" onClick={() => navigator.clipboard?.writeText(u.id)} title="Скопировать ID">📋</button>
+                  </div>
                 </div>
-
-                {/* Блок описания с редактированием */}
-                <div className="user-description">
-                  {editingDesc === u.id ? (
-                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <input
-                        type="text"
-                        value={editDescValue}
-                        onChange={e => setEditDescValue(e.target.value)}
-                        className="input-inline"
-                        style={{ flex: 1, minWidth: '150px' }}
-                        autoFocus
-                      />
-                      <button
-                        className="btn btn-primary btn-xs"
-                        onClick={async () => {
-                          try {
-                            await updateUserDescription(group.id, u.id, editDescValue)
-                            setEditingDesc(null)
-                            loadTab()
-                          } catch (err) {
-                            alert('Ошибка при сохранении описания')
-                          }
-                        }}
-                      >
-                        ✓
-                      </button>
-                      <button
-                        className="btn btn-outline btn-xs"
-                        onClick={() => setEditingDesc(null)}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span>{u.description || <span style={{ color: 'var(--text2)' }}>—</span>}</span>
-                      <button
-                        className="btn-icon"
-                        style={{ fontSize: '14px' }}
-                        onClick={() => {
-                          setEditingDesc(u.id)
-                          setEditDescValue(u.description || '')
-                        }}
-                        title="Редактировать описание"
-                      >
-                        ✎
-                      </button>
-                    </div>
+                <div className="user-card-actions">
+                  {u.has_session && (
+                    <button className="btn btn-outline btn-xs"
+                            onClick={async () => { await resetUserSessions(u.id); loadTab() }}
+                            title="Сбросить сессию">⏏ Сессия</button>
                   )}
-                </div>
-
-                <div className="user-uid">
-                  <span className="user-uid-label">ID:</span>
-                  <code className="user-uid-value">{u.id}</code>
-                  <button className="btn-copy" onClick={() => navigator.clipboard?.writeText(u.id)} title="Скопировать ID">📋</button>
+                  {u.role !== 'superadmin' && (
+                    <button className={`btn btn-xs ${u.single_session ? 'btn-warning' : 'btn-outline'}`}
+                            onClick={async () => { await updateSingleSession(u.id, !u.single_session); loadTab() }}
+                            title={u.single_session ? 'Одна сессия' : 'Несколько сессий'}>
+                      {u.single_session ? '🔒 1 сессия' : '🔓 мульти'}
+                    </button>
+                  )}
+                  <input className="input-inline" placeholder="Новый пароль" type="password"
+                         autoComplete="new-password"
+                         value={resetPwd[u.id] || ''}
+                         onChange={e => setResetPwd(p => ({ ...p, [u.id]: e.target.value }))} />
+                  <button className="btn btn-warning btn-xs"
+                          disabled={!(resetPwd[u.id]?.trim().length >= 6)}
+                          onClick={() => handleResetPwd(u.id)}>
+                    Пароль
+                  </button>
+                  <button className="btn btn-danger btn-xs"
+                          onClick={async () => {
+                            if (!confirm('Удалить пользователя из группы?')) return
+                            await removeUserFromGroup(group.id, u.id); loadTab()
+                          }}>✕</button>
                 </div>
               </div>
-
-              <div className="user-card-actions">
-                {u.has_session && (
-                  <button className="btn btn-outline btn-xs"
-                          onClick={async () => { await resetUserSessions(u.id); loadTab() }}
-                          title="Сбросить сессию">⏏ Сессия</button>
-                )}
-                {/* остальные кнопки */}
-              </div>
-            </div>
-          ))}
+            ))}
           </div>
         </div>
       )}
@@ -461,10 +420,336 @@ function SettingsView({ group, groups, onBack }) {
           </div>
         </div>
       )}
+
+      {/* ── GSM ── */}
+      {tab === 'gsm' && (
+        <GsmView groupId={group.id} users={users} onLoadUsers={loadTab} />
+      )}
     </div>
   )
 }
 
+// ── GSM вкладка ───────────────────────────────────────────────
+function GsmView({ groupId, users, onLoadUsers }) {
+  const [phones, setPhones]         = useState([])
+  const [journal, setJournal]       = useState(null)
+  const [status, setStatus]         = useState(null)
+  const [loading, setLoading]       = useState(false)
+  const [error, setError]           = useState(null)
+  const [revealedNum, setRevealedNum] = useState({})  // idx → phone string
+  const [smsReply, setSmsReply]     = useState({})    // jIdx → text
+  const [addPhone, setAddPhone]     = useState({ userId: '', phone: '', relayMask: 1 })
+  const [saving, setSaving]         = useState(false)
+  const fileRef = useRef(null)
+
+  useEffect(() => {
+    loadPhones()
+    loadStatus()
+  }, [groupId])
+
+  async function loadPhones() {
+    try { setPhones(await gsmGetPhones(groupId)) } catch (e) { setError(e.message) }
+  }
+
+  async function loadStatus() {
+    try { setStatus(await gsmGetStatus(groupId)) } catch {}
+  }
+
+  async function loadJournal() {
+    setLoading(true)
+    try { setJournal(await gsmGetSmsJournal(groupId, 20)) }
+    catch (e) { setError(e.message) }
+    finally { setLoading(false) }
+  }
+
+  async function handleAddPhone(e) {
+    e.preventDefault(); setSaving(true); setError(null)
+    try {
+      await gsmSetPhone(groupId, addPhone.userId, addPhone.phone, addPhone.relayMask)
+      setAddPhone({ userId: '', phone: '', relayMask: 1 })
+      loadPhones()
+    } catch (e) { setError(e.message) }
+    finally { setSaving(false) }
+  }
+
+  async function handleDeletePhone(idx) {
+    if (!confirm('Удалить телефон пользователя?')) return
+    try { await gsmDeletePhone(groupId, idx); loadPhones() }
+    catch (e) { setError(e.message) }
+  }
+
+  async function handleRevealPhone(idx) {
+    try {
+      const res = await gsmGetPhoneNumber(groupId, idx)
+      setRevealedNum(p => ({ ...p, [idx]: res.phone || 'не найден' }))
+    } catch (e) { setRevealedNum(p => ({ ...p, [idx]: '⚠️ ' + e.message })) }
+  }
+
+  async function handleSendSms(to, text, jIdx) {
+    if (!text.trim()) return
+    try {
+      await gsmSendSms(groupId, to, text, jIdx)
+      setSmsReply(p => ({ ...p, [jIdx]: '' }))
+      loadJournal()
+    } catch (e) { setError(e.message) }
+  }
+
+  async function handleClearJournal() {
+    if (!confirm('Очистить журнал SMS на устройстве?')) return
+    try { await gsmClearSmsJournal(groupId); setJournal(null) }
+    catch (e) { setError(e.message) }
+  }
+
+  async function handleBackup() {
+    try { await gsmDownloadBackup(groupId) }
+    catch (e) { setError(e.message) }
+  }
+
+  async function handleRestore(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!confirm(`Восстановить БД из файла "${file.name}"? Текущие данные будут заменены.`)) return
+    try {
+      const res = await gsmRestoreBackup(groupId, file)
+      alert(res.ok ? '✅ БД восстановлена' : '❌ Ошибка восстановления')
+    } catch (e) { setError(e.message) }
+    e.target.value = ''
+  }
+
+  const isOnline = status?.is_online
+
+  return (
+    <div className="tab-content">
+      {error && (
+        <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 8 }}>
+          {error}
+          <button className="btn btn-xs btn-outline" style={{ marginLeft: 8 }}
+                  onClick={() => setError(null)}>✕</button>
+        </div>
+      )}
+
+      {/* Статус модема */}
+      {status?.gsm_status && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12,
+                      display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <span>📶 {status.gsm_status.operator || '—'}</span>
+          <span>Сигнал: {status.gsm_status.signal ?? '—'}/4</span>
+          <span>SIM: {status.gsm_status.sim ? '✅' : '❌'}</span>
+          <span>Сеть: {status.gsm_status.net ? '✅' : '❌'}</span>
+          {status.gsm_status.unread_sms > 0 && (
+            <span style={{ color: 'var(--accent)' }}>
+              📨 {status.gsm_status.unread_sms} непрочитанных
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Телефонная книга */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div className="section-title" style={{ margin: 0 }}>📞 Телефонная книга</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn btn-outline btn-xs" onClick={handleBackup}
+                    disabled={!isOnline} title={!isOnline ? 'Устройство оффлайн' : ''}>
+              ⬇️ Бэкап
+            </button>
+            <button className="btn btn-outline btn-xs"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={!isOnline} title={!isOnline ? 'Устройство оффлайн' : ''}>
+              ⬆️ Восстановить
+            </button>
+            <input ref={fileRef} type="file" accept=".jdb"
+                   style={{ display: 'none' }} onChange={handleRestore} />
+            <button className="btn btn-outline btn-xs" onClick={() => gsmTriggerCompaction(groupId)}
+                    disabled={!isOnline} title="Компактификация БД">
+              🗜️
+            </button>
+          </div>
+        </div>
+
+        {/* Список телефонов */}
+        {phones.length === 0
+          ? <div className="empty-state" style={{ padding: '8px 0' }}>Нет записей</div>
+          : phones.map(p => (
+            <div key={p.idx} className="user-card" style={{ marginBottom: 6 }}>
+              <div className="user-card-main">
+                <div className="user-info">
+                  <span className="user-login">{p.login}</span>
+                  {p.display_name && <span className="user-display-name-inline">{p.display_name}</span>}
+                  <span style={{ fontSize: 11, color: 'var(--text2)' }}>
+                    реле: {p.relay_mask?.toString(2).padStart(4, '0')}
+                  </span>
+                </div>
+                {revealedNum[p.idx] && (
+                  <div style={{ fontSize: 12, color: 'var(--accent)', marginTop: 2 }}>
+                    📞 {revealedNum[p.idx]}
+                  </div>
+                )}
+              </div>
+              <div className="user-card-actions">
+                <button className="btn btn-outline btn-xs"
+                        onClick={() => handleRevealPhone(p.idx)}
+                        disabled={!isOnline}>
+                  👁 Номер
+                </button>
+                <button className="btn btn-danger btn-xs"
+                        onClick={() => handleDeletePhone(p.idx)}>✕</button>
+              </div>
+            </div>
+          ))
+        }
+
+        {/* Добавить телефон */}
+        <form onSubmit={handleAddPhone} className="add-user-form"
+              style={{ marginTop: 10, padding: '10px', background: 'var(--bg2)',
+                       borderRadius: 8, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+            + Добавить телефон
+          </div>
+          <div className="field-row">
+            <div className="field">
+              <label>Пользователь</label>
+              <select value={addPhone.userId}
+                      onChange={e => setAddPhone(p => ({ ...p, userId: e.target.value }))}
+                      required>
+                <option value="">— выбрать —</option>
+                {users.filter(u => u.role === 'user').map(u => (
+                  <option key={u.id} value={u.id}>{u.login}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Телефон</label>
+              <input value={addPhone.phone} placeholder="79991234567"
+                     inputMode="numeric"
+                     onChange={e => setAddPhone(p => ({ ...p, phone: e.target.value }))}
+                     required minLength={10} maxLength={15} />
+            </div>
+            <div className="field">
+              <label>Реле (маска)</label>
+              <input type="number" min={1} max={15} value={addPhone.relayMask}
+                     onChange={e => setAddPhone(p => ({ ...p, relayMask: parseInt(e.target.value) }))} />
+            </div>
+          </div>
+          <button type="submit" className="btn btn-primary btn-sm"
+                  disabled={saving || !isOnline}>
+            {saving ? 'Сохранение...' : '💾 Сохранить'}
+          </button>
+          {!isOnline && <span style={{ fontSize: 11, color: 'var(--text2)', marginLeft: 8 }}>
+            (устройство оффлайн — запись сохранится, отправка при подключении)
+          </span>}
+        </form>
+      </div>
+
+      {/* Журнал SMS */}
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between',
+                      alignItems: 'center', marginBottom: 8 }}>
+          <div className="section-title" style={{ margin: 0 }}>📨 Журнал SMS</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn btn-outline btn-xs"
+                    onClick={loadJournal} disabled={loading || !isOnline}>
+              {loading ? '...' : '🔄 Загрузить'}
+            </button>
+            {journal && (
+              <button className="btn btn-danger btn-xs" onClick={handleClearJournal}
+                      disabled={!isOnline}>
+                🗑️ Очистить
+              </button>
+            )}
+          </div>
+        </div>
+
+        {!journal && (
+          <div className="empty-state" style={{ padding: '8px 0', fontSize: 12 }}>
+            Нажмите «Загрузить» для получения журнала с устройства
+          </div>
+        )}
+
+        {journal?.data?.entries?.map((entry, i) => (
+          <div key={i} style={{
+            padding: '8px 10px', marginBottom: 6,
+            background: entry.read ? 'var(--bg)' : 'var(--bg2)',
+            border: `1px solid ${entry.read ? 'var(--border)' : 'var(--accent)'}`,
+            borderRadius: 8, fontSize: 13,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between',
+                          alignItems: 'flex-start', gap: 8 }}>
+              <div>
+                <span style={{ fontWeight: 600 }}>{entry.from}</span>
+                {!entry.read && (
+                  <span style={{ marginLeft: 6, fontSize: 10,
+                                 color: 'var(--accent)', fontWeight: 700 }}>NEW</span>
+                )}
+                {entry.replied && (
+                  <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text2)' }}>
+                    ✉️ отвечено
+                  </span>
+                )}
+                <div style={{ color: 'var(--text2)', marginTop: 2 }}>{entry.text}</div>
+                <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 2 }}>
+                  {new Date(entry.ts * 1000).toLocaleString('ru')}
+                </div>
+              </div>
+              {isOnline && !entry.replied && (
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center',
+                              flexShrink: 0 }}>
+                  <input className="input-inline" placeholder="Ответ..."
+                         value={smsReply[i] || ''}
+                         onChange={e => setSmsReply(p => ({ ...p, [i]: e.target.value }))}
+                         style={{ width: 100 }} />
+                  <button className="btn btn-primary btn-xs"
+                          disabled={!smsReply[i]?.trim()}
+                          onClick={() => handleSendSms(entry.from, smsReply[i], i)}>
+                    ▶
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+function ExistingUserPicker({ groupId, value, onChange }) {
+  const [users, setUsers]     = useState([])
+  const [search, setSearch]   = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    getAdminUsers().then(setUsers).catch(() => {}).finally(() => setLoading(false))
+  }, [])
+
+  const filtered = users.filter(u =>
+    !search ||
+    u.login.toLowerCase().includes(search.toLowerCase()) ||
+    (u.display_name || '').toLowerCase().includes(search.toLowerCase())
+  )
+
+  if (loading) return <div className="field"><div className="spinner" style={{ width: 20, height: 20, borderWidth: 2 }} /></div>
+  if (users.length === 0) return <div className="field"><div className="empty-state" style={{ padding: '12px 0' }}>Нет пользователей в других группах</div></div>
+
+  return (
+    <div className="field">
+      <label>Выберите пользователя</label>
+      <input autoComplete="off" placeholder="Поиск..." value={search}
+             onChange={e => setSearch(e.target.value)} style={{ marginBottom: 6 }} />
+      <div className="user-picker-list">
+        {filtered.length === 0 && <div style={{ padding: '8px 12px', color: 'var(--text2)', fontSize: 13 }}>Не найдено</div>}
+        {filtered.map(u => (
+          <label key={u.id} className={`user-picker-item ${value === u.id ? 'selected' : ''}`}>
+            <input type="radio" name="existing_user" value={u.id}
+                   checked={value === u.id} onChange={() => onChange(u.id)} style={{ display: 'none' }} />
+            <span className="user-picker-login">{u.login}</span>
+            {u.display_name && <span className="user-picker-name">{u.display_name}</span>}
+            <span className={`user-role role-${u.role}`} style={{ marginLeft: 'auto' }}>{u.role}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // ── Импорт пользователей из группы ───────────────────────────
 function ImportFromGroup({ currentGroupId, groups, onImported }) {

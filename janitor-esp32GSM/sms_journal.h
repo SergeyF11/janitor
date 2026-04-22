@@ -15,6 +15,7 @@ struct SmsJournalEntry {
     char     number[SMSJ_NUMBER_LEN]; // номер отправителя
     char     text[SMSJ_TEXT_LEN];   // текст SMS
     uint8_t  flags;                 // бит 0: прочитано, бит 1: ответ отправлен
+    uint16_t  reserved;              // зарезервировано, должно быть 0
 
     bool isRead()         const { return flags & 0x01; }
     bool isReplied()      const { return flags & 0x02; }
@@ -22,7 +23,7 @@ struct SmsJournalEntry {
     void markReplied()          { flags |=  0x02; }
     bool isEmpty()        const { return ts == 0; }
 };
-static_assert(sizeof(SmsJournalEntry) == 102, "SmsJournalEntry size mismatch");
+static_assert(sizeof(SmsJournalEntry) == 104, "SmsJournalEntry size mismatch");
 
 // ── Заголовок файла (8 байт) ──────────────────────────────────
 struct SmsJournalHeader {

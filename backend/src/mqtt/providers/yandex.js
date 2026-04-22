@@ -153,8 +153,9 @@ function getConnectOptions() {
   return {
     url: `mqtts://${process.env.MQTT_HOST || 'mqtt.cloud.yandex.net'}:${process.env.MQTT_PORT || 8883}`,
     options: {
+      //protocolVersion:    5,
       clientId:           `janitor-backend-${Date.now()}`,
-      clean:              false,
+      clean:              true, //false,
       reconnectPeriod:    5000,
       connectTimeout:     10000,
       cert:               fs.readFileSync(process.env.MQTT_CERT_FILE),

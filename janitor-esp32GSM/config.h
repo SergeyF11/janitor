@@ -1,8 +1,9 @@
 #pragma once
 #include <Arduino.h>
 
-#define FW_VERSION        "1.3.1"
+#define FW_VERSION        "1.0.0-gsm"
 #define DEVICE_PREFIX     "JANITOR"
+#define GSM_VARIANT       1        // признак GSM-прошивки
 
 #define AP_SSID_PREFIX    "Janitor-"
 #define AP_PASSWORD       ""
@@ -17,6 +18,17 @@
 #define CONFIG_FILE       "/config.json"
 #define RELAY_FILE        "/relay.json"
 #define CERT_FILE         "/cert.der"
+
+// ── TTGO T-Call (SIM800L) пины ────────────────────────────────
+#define MODEM_RX          26
+#define MODEM_TX          27
+#define MODEM_PWRKEY       4
+#define MODEM_POWER_ON    23
+#define MODEM_RST          5
+#define PMU_SDA           21
+#define PMU_SCL           22
+#define SERIAL_MODEM      Serial1
+#define MODEM_BAUD        115200
 
 #define CRYPTO_SALT       "JanitorSalt2024!"
 
@@ -92,6 +104,10 @@ struct DeviceConfig {
   bool     tls_secure;
   char     tz[16];
 
+  // GSM (только для GSM-прошивки)
+  char     sim_pin[5];     // PIN SIM-карты, пустой = без PIN
+  bool     gsm_enabled;    // false = GSM не инициализировать
+
   // Реле
   RelayConfig relays[MAX_RELAYS];
 
@@ -138,6 +154,9 @@ struct DeviceConfig {
     }
     s.printf("TLS: %s | Relays: %u\n",
       tls_secure ? "secure" : "insecure", relayCount());
+    s.printf("GSM: %s | SIM PIN: %s\n",
+      gsm_enabled ? "enabled" : "disabled",
+      strlen(sim_pin) ? "set" : "none");
     for (uint8_t i = 0; i < MAX_RELAYS; i++) {
       if (!relays[i].isValid()) continue;
       s.printf("  [%u] pin=%u name=%s\n", i, relays[i].pin, relays[i].name);

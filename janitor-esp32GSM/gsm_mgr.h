@@ -11,32 +11,32 @@
 #include "relay.h"
 
 // ── Пины TTGO T-Call ─────────────────────────────────────────
-#ifndef MODEM_RX
-  #define MODEM_RX        26
-#endif
-#ifndef MODEM_TX
-  #define MODEM_TX        27
-#endif
-#ifndef MODEM_PWRKEY
-  #define MODEM_PWRKEY     4
-#endif
-#ifndef MODEM_POWER_ON
-  #define MODEM_POWER_ON  23
-#endif
-#ifndef MODEM_RST
-  #define MODEM_RST        5
-#endif
+// #ifndef MODEM_RX
+//   #define MODEM_RX        26
+// #endif
+// #ifndef MODEM_TX
+//   #define MODEM_TX        27
+// #endif
+// #ifndef MODEM_PWRKEY
+//   #define MODEM_PWRKEY     4
+// #endif
+// #ifndef MODEM_POWER_ON
+//   #define MODEM_POWER_ON  23
+// #endif
+// #ifndef MODEM_RST
+//   #define MODEM_RST        5
+// #endif
 
-// PMU IP5306 (I2C)
-#ifndef PMU_SDA
-  #define PMU_SDA         21
-#endif
-#ifndef PMU_SCL
-  #define PMU_SCL         22
-#endif
+// // PMU IP5306 (I2C)
+// #ifndef PMU_SDA
+//   #define PMU_SDA         21
+// #endif
+// #ifndef PMU_SCL
+//   #define PMU_SCL         22
+// #endif
 
-#define SERIAL_MODEM      Serial1
-#define MODEM_BAUD        115200
+// #define SERIAL_MODEM      Serial1
+// #define MODEM_BAUD        115200
 
 // ── FreeRTOS параметры ────────────────────────────────────────
 #define GSM_TASK_STACK    4096

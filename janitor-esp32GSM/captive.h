@@ -54,7 +54,7 @@ public:
         } else if (upload.status == UPLOAD_FILE_END) {
           if (_certFile) {
             _certFile.close();
-            _ptr->_statusMsg = F("✅ Сертификат загружен (")
+            _ptr->_statusMsg = ("✅ Сертификат загружен (")
                              + String(upload.totalSize) + " б)";
             _ptr->_statusOk = true;
           }
@@ -125,6 +125,7 @@ private:
 
     GP.NAV_TABS_LINKS("/",         "⚙️ WiFi");
     GP.NAV_TABS_LINKS("/relay",    "🔌 Реле");
+    GP.NAV_TABS_LINKS("/gsm",      "📱 GSM");
     GP.NAV_TABS_LINKS("/register", "🔗 Привязка");
     GP.NAV_TABS_LINKS("/cert",     "🔒 Сертификат");
     GP.NAV_TABS_LINKS("/info",     "ℹ️ Инфо");
@@ -232,6 +233,27 @@ private:
       GP.BLOCK_END();
     }
 
+    // ── GSM ──────────────────────────────────────────────────
+    else if (uri == "/gsm") {
+      GP.FORM_BEGIN("/save_gsm");
+      GP.BLOCK_BEGIN();
+      GP.TITLE("📱 GSM модем");
+      GP.LABEL("Включить GSM");
+      GP.CHECK("gsm_en", _cfg->gsm_enabled, GP_GREEN);
+      GP.HR();
+      GP.LABEL("PIN SIM-карты (4 цифры, пусто = без PIN)");
+      GP.TEXT("sim_pin' inputmode=\"numeric\" maxlength=\"4\"",
+              "Например: 1234", _cfg->sim_pin, "4", 4, "[0-9]*");
+      GP.HR();
+      GP.ALERT("info",
+        F("ℹ️ PIN вводится однократно при старте устройства.\n"
+          "Оставьте пустым если SIM без PIN."));
+      GP.HR();
+      GP.SUBMIT("💾 Сохранить GSM");
+      GP.BLOCK_END();
+      GP.FORM_END();
+    }
+
     // ── Сертификат ───────────────────────────────────────────
     else if (uri == "/cert") {
       GP.BLOCK_BEGIN();
@@ -307,6 +329,23 @@ private:
   }
 
   void _handleAction() {
+
+    if (_portal.form("/save_gsm")) {
+      _cfg->gsm_enabled = _portal.getBool("gsm_en");
+      String pin = _portal.getString("sim_pin");
+      pin.trim();
+      // Принимаем только 0 или 4 цифры
+      if (pin.length() == 0 || pin.length() == 4) {
+        strlcpy(_cfg->sim_pin, pin.c_str(), sizeof(_cfg->sim_pin));
+        _saveTz();
+        Storage.saveMainConfig(*_cfg);
+        _statusMsg = F("✅ GSM настройки сохранены");
+        _statusOk  = true;
+      } else {
+        _statusMsg = F("❌ PIN должен содержать 4 цифры или быть пустым");
+        _statusOk  = false;
+      }
+    }
 
     if (_portal.form("/save_wifi")) {
       _portal.copyStr("w1s", _cfg->wifi1_ssid, sizeof(_cfg->wifi1_ssid));

@@ -67,7 +67,14 @@ static_assert(sizeof(IdxRecord) == 4, "IdxRecord must be 4 bytes");
 // ── Запись хэш-таблицы (6 байт) ──────────────────────────────
 // Загружается в RAM из ph_hash.bin при старте
 struct HashRecord {
-    uint32_t hash;
+    //uint32_t hash;
+    uint16_t hashH;      // 16 битов достаточно для 256 бакетов, хэш обрезается до 16 бит
+    uint16_t hashL;      // для коллизий храним полный 32-битный хэш, разделённый на две части
+    uint32_t hash() const { return ((uint32_t)hashH << 16) | hashL; }
+    void setHash(uint32_t h) {
+        hashH = (h >> 16) & 0xFFFF;
+        hashL = h & 0xFFFF;
+    }
     uint16_t offset;    // offset в ph_data.bin
 };
 static_assert(sizeof(HashRecord) == 6, "HashRecord must be 6 bytes");

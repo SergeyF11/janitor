@@ -45,10 +45,12 @@ public:
 
   // Синхронизация времени (нужна для TLS)
  bool syncTime(bool required = true) {
-    if ( _tz[0] == '\0' )
-        configTime( 0, 0, NTP_SERVERS);
-    else
-        configTime( _tz,  NTP_SERVERS);
+    configTime( 0, 0, NTP_SERVERS);
+    if ( _tz[0] != '\0' ){
+      setenv("TZ", _tz, 1);
+      tzset();  
+    }
+    
     
     if (!required) {
       // Без сертификата — просто запускаем NTP и не ждём

@@ -103,6 +103,7 @@ function getConnectOptions() {
   return {
     url: `mqtt://${MQTT_HOST()}:${MQTT_PORT()}`,
     options: {
+      protocolVersion:    5,
       username:           MQTT_USER(),
       password:           MQTT_PASS(),
       clientId:           `janitor-backend-${Date.now()}`,
@@ -110,7 +111,7 @@ function getConnectOptions() {
       reconnectPeriod:    5000,
       connectTimeout:     10000,
       rejectUnauthorized: false,
-    },
+    },  
   }
 }
 

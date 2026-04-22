@@ -141,8 +141,8 @@ export async function getMyGroups() {
   return apiFetch('/user/groups')
 }
 
-export async function triggerRelay(relayId) {
-  return apiFetch(`/user/relays/${relayId}/trigger`, { method: 'POST' })
+export async function triggerRelay(groupId) {
+  return apiFetch(`/user/groups/${groupId}/trigger`, { method: 'POST' })
 }
 
 export async function getMyProfile() {
@@ -213,14 +213,10 @@ export async function updateSingleSession(userId, single_session) {
 }
 
 // ── Admin: устройства ─────────────────────────────────────────
-export async function adminTriggerRelay(relayId) {
-  return apiFetch(`/admin/relays/${relayId}/trigger`, { method: 'POST' })
-}
-
-export async function patchAdminRelay(relayId, data) {
-  return apiFetch(`/admin/relays/${relayId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
+export async function adminTriggerRelay(groupId, relayIndex = 0) {
+  return apiFetch(`/admin/groups/${groupId}/trigger`, {
+    method: 'POST',
+    body: JSON.stringify({ relay: relayIndex }),
   })
 }
 
@@ -355,4 +351,88 @@ export async function importUsersFromGroup(groupId, sourceGroupId) {
 
 export async function getAdminUsers() {
   return apiFetch('/admin/users')
+}
+
+// ── GSM ───────────────────────────────────────────────────────
+
+export async function gsmGetPhones(groupId) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/phones`)
+}
+
+export async function gsmSetPhone(groupId, userId, phone, relayMask) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/phones`, {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId, phone, relay_mask: relayMask }),
+  })
+}
+
+export async function gsmUpdatePhone(groupId, idx, data) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/phones/${idx}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function gsmDeletePhone(groupId, idx) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/phones/${idx}`, { method: 'DELETE' })
+}
+
+// Запросить номер с ESP (номер не хранится на сервере)
+export async function gsmGetPhoneNumber(groupId, idx) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/phones/${idx}/number`)
+}
+
+export async function gsmGetSmsJournal(groupId, max = 10) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/sms-journal?max=${max}`)
+}
+
+export async function gsmSendSms(groupId, to, text, journalIdx) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/send-sms`, {
+    method: 'POST',
+    body: JSON.stringify({ to, text, ...(journalIdx != null ? { journal_idx: journalIdx } : {}) }),
+  })
+}
+
+export async function gsmClearSmsJournal(groupId) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/sms-journal`, { method: 'DELETE' })
+}
+
+export async function gsmGetStatus(groupId) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/status`)
+}
+
+export async function gsmTriggerCompaction(groupId) {
+  return apiFetch(`/admin/groups/${groupId}/gsm/compact`, { method: 'POST' })
+}
+
+// Скачать бэкап БД телефонов как файл
+export async function gsmDownloadBackup(groupId) {
+  const token = _accessToken
+  const url   = `/janitor/api/admin/groups/${groupId}/gsm/backup`
+  const resp  = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  if (!resp.ok) throw new Error(await resp.text())
+  const blob = await resp.blob()
+  const a    = document.createElement('a')
+  a.href     = URL.createObjectURL(blob)
+  a.download = `phonebook_${groupId}_${Date.now()}.jdb`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+// Восстановить БД из файла (File object)
+export async function gsmRestoreBackup(groupId, file) {
+  const token   = _accessToken
+  const url     = `/janitor/api/admin/groups/${groupId}/gsm/restore`
+  const form    = new FormData()
+  form.append('file', file)
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  })
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}))
+    throw new Error(err.error || resp.statusText)
+  }
+  return resp.json()
 }

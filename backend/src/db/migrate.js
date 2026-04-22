@@ -2,7 +2,41 @@
 const bcrypt = require('bcryptjs')
 const { getDb } = require('./connection')
 
-async function migrate() {
+async function migrateGSM() {
+    const db = getDb()
+  console.log('[migrate] Starting...')
+
+  await db.unsafe(`
+    -- Колонки в devices
+ALTER TABLE devices
+  ADD COLUMN IF NOT EXISTS gsm_status     JSONB,
+  ADD COLUMN IF NOT EXISTS gsm_unread_sms INTEGER NOT NULL DEFAULT 0;
+ 
+-- Таблица привязки телефонов к пользователям
+-- Номер телефона здесь НЕ хранится — только ссылки
+CREATE TABLE IF NOT EXISTS gsm_phone_idx (
+  id          SERIAL PRIMARY KEY,          -- idx для ESP (монотонный, не переиспользуется)
+  group_id    UUID NOT NULL REFERENCES groups(id)  ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id)   ON DELETE CASCADE,
+  device_id   VARCHAR(50) NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+  relay_mask  SMALLINT NOT NULL DEFAULT 1, -- битовая маска разрешённых реле
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (group_id, user_id, device_id)
+);
+ 
+CREATE INDEX IF NOT EXISTS idx_gsm_phone_idx_device  ON gsm_phone_idx(device_id);
+CREATE INDEX IF NOT EXISTS idx_gsm_phone_idx_group   ON gsm_phone_idx(group_id);
+CREATE INDEX IF NOT EXISTS idx_gsm_phone_idx_user    ON gsm_phone_idx(user_id);
+ 
+-- Проверка
+SELECT 'gsm_phone_idx created' AS status;
+SELECT column_name FROM information_schema.columns
+  WHERE table_name = 'devices' AND column_name IN ('gsm_status','gsm_unread_sms');
+  `)
+}
+
+
+async function migrateOld() {
   const db = getDb()
   console.log('[migrate] Starting...')
 
@@ -172,4 +206,6 @@ async function migrate() {
   console.log('[migrate] Done')
 }
 
-module.exports = { migrate }
+async function migrate() { migrateGSM() }
+
+module.exports = { migrate, migrateGSM, migrateOld }
