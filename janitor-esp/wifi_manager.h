@@ -17,25 +17,40 @@ static constexpr time_t _2025_01_01_00_00_ = 1735689600LL;
 class WiFiManager {
 public:
   // Подключиться к WiFi (пробуем обе сети)
-  bool connect(DeviceConfig& cfg) {
+  bool connect(DeviceConfig& cfg, uint8_t retries = 5 ) {
+    uint8_t attempt = 0;
+    if( attempt > retries ) {
+      Serial.println(F("[WiFi] Max retries reached, rebooting..."));
+      ESP.restart();
+      return false;
+    }
+
     Led.setMode( LedManager::CONNECTING);
     //_tz = cfg.tz;
     strncpy( _tz, cfg.tz, sizeof(_tz));
     // Пробуем основную сеть
     if (strlen(cfg.wifi1_ssid) > 0) {
       Serial.printf("[WiFi] Connecting to %s\n", cfg.wifi1_ssid);
-      if (_tryConnect(cfg.wifi1_ssid, cfg.wifi1_psk)) return true;
+      if (_tryConnect(cfg.wifi1_ssid, cfg.wifi1_psk)) {
+        attempt = 0;
+        return true;
+      }
     }
 
     // Пробуем резервную
     if (strlen(cfg.wifi2_ssid) > 0) {
       Serial.printf("[WiFi] Trying backup: %s\n", cfg.wifi2_ssid);
-      if (_tryConnect(cfg.wifi2_ssid, cfg.wifi2_psk)) return true;
+      if (_tryConnect(cfg.wifi2_ssid, cfg.wifi2_psk)) {
+        attempt = 0;
+        return true;
+      }
     }
 
     Serial.println(F("[WiFi] Connection failed"));
     //Led.setError();
-     Led.setMode( LedManager::ERROR);
+    Led.setMode( LedManager::ERROR);
+    attempt++;
+    delay(2000);
     return false;
   }
 
