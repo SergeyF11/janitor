@@ -12,45 +12,31 @@
   #include <sntp.h>
 #endif
 
+const uint8_t MAX_RETRY = 5;
 static constexpr time_t _2025_01_01_00_00_ = 1735689600LL;
 
 class WiFiManager {
 public:
   // Подключиться к WiFi (пробуем обе сети)
-  bool connect(DeviceConfig& cfg, uint8_t retries = 5 ) {
-    uint8_t attempt = 0;
-    if( attempt > retries ) {
-      Serial.println(F("[WiFi] Max retries reached, rebooting..."));
-      ESP.restart();
-      return false;
-    }
-
+  bool connect(DeviceConfig& cfg) {
     Led.setMode( LedManager::CONNECTING);
     //_tz = cfg.tz;
     strncpy( _tz, cfg.tz, sizeof(_tz));
     // Пробуем основную сеть
     if (strlen(cfg.wifi1_ssid) > 0) {
       Serial.printf("[WiFi] Connecting to %s\n", cfg.wifi1_ssid);
-      if (_tryConnect(cfg.wifi1_ssid, cfg.wifi1_psk)) {
-        attempt = 0;
-        return true;
-      }
+      if (_tryConnect(cfg.wifi1_ssid, cfg.wifi1_psk)) return true;
     }
 
     // Пробуем резервную
     if (strlen(cfg.wifi2_ssid) > 0) {
       Serial.printf("[WiFi] Trying backup: %s\n", cfg.wifi2_ssid);
-      if (_tryConnect(cfg.wifi2_ssid, cfg.wifi2_psk)) {
-        attempt = 0;
-        return true;
-      }
+      if (_tryConnect(cfg.wifi2_ssid, cfg.wifi2_psk)) return true;
     }
 
     Serial.println(F("[WiFi] Connection failed"));
     //Led.setError();
-    Led.setMode( LedManager::ERROR);
-    attempt++;
-    delay(2000);
+     Led.setMode( LedManager::ERROR);
     return false;
   }
 
@@ -94,11 +80,24 @@ public:
   }
 
   // Переподключение если потеряли сеть
-  bool reconnectIfNeeded(DeviceConfig& cfg) {
+  bool reconnectIfNeeded(DeviceConfig& cfg, uint8_t maxRetry = MAX_RETRY, void (*onMaxRetryReached)(void)  = nullptr) {
+    static uint8_t retryCount = 0;
     if (isConnected()) return true;
+    
     Serial.println(F("[WiFi] Lost connection, reconnecting..."));
+    retryCount++;
+    if( retryCount > maxRetry ) {
+      Serial.println(F("[WiFi] Max retry count reached"));
+      if (onMaxRetryReached) onMaxRetryReached();
+      retryCount = 0; // Сброс счётчика после достижения максимума
+      //return false;
+    }
     Led.setMode( LedManager::CONNECTING);
-    return connect(cfg);
+    if( connect(cfg) ) {
+      retryCount = 0;
+      return true;
+    }
+    return false;
   }
 
 private:
