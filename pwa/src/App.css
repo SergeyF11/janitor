@@ -235,7 +235,7 @@ input[type="checkbox"] { width: auto; accent-color: var(--primary); }
   width: 100%;
   padding: 18px;
   border-radius: var(--radius);
-  border: none;
+  border: 1px solid transparent;
   font-size: 18px;
   font-weight: 600;
   cursor: pointer;
@@ -255,7 +255,7 @@ input[type="checkbox"] { width: auto; accent-color: var(--primary); }
 .relay-on  { background: var(--success); color: #fff; box-shadow: 0 4px 20px rgba(76,175,125,0.35); }
 .relay-on:hover:not(:disabled):not(.relay-busy) { background: #3d9a6a; }
 
-.relay-off { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
+.relay-off { background: var(--bg3); color: var(--text2); border-color: var(--border); ; }
 .relay-off:hover:not(:disabled):not(.relay-busy) { border-color: var(--primary); color: var(--text); }
 
 .relay-offline { opacity: 0.4; }
